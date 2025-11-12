@@ -8,9 +8,11 @@ This project was created as a tooling extension for the [go-agents](https://gith
 
 ## Current Status
 
-**Phase**: Pre-Release Development (not yet versioned)
+**Phase**: Pre-Release Development (targeting v0.1.0)
 
-The API is under active development and subject to change as additional features and format support are added. The library is functional for its current capabilities but should be considered experimental until the first versioned release (v0.1.0).
+The API is under active development and subject to change as Phase 2 features are added. The library is functional for its current capabilities but should be considered experimental until the first versioned release (v0.1.0).
+
+**v0.1.0 Scope**: Core PDF processing with image caching, enhancement filters, and web service readiness features. Multi-format support (Office documents, OCR) is deferred to v1.0.0+.
 
 ### What This Library Provides
 
@@ -48,6 +50,12 @@ The library is intentionally scoped as a document processing utility. The follow
 - **Document Classification**: Semantic analysis or categorization of documents
 - **Document Generation**: Creating or modifying documents (read-only operations only)
 - **Format Conversion Chains**: Multi-step conversion pipelines (single-step conversions only)
+
+### Version Scope Clarification
+
+**v0.1.0 Focus**: Production-ready PDF processing with web service capabilities (caching, enhancement filters, JSON configuration). This release completes the core infrastructure needed for agent-lab integration.
+
+**v1.0.0+ Focus**: Multi-format document support (Office documents, OCR), advanced text extraction, and sophisticated processing pipelines. These features build upon the stable v0.1.0 foundation.
 
 ## Design Philosophy
 
@@ -112,7 +120,127 @@ Converts image bytes to base64 data URIs for direct embedding:
 - No external storage required
 - Immediate availability for processing
 
-## Future Development
+## v0.1.0 Completion Roadmap (Phase 2)
+
+The following features complete the v0.1.0 release, adding web service readiness and performance optimization capabilities:
+
+### A. Image Caching Infrastructure
+
+**Package**: `pkg/cache/`
+
+**Purpose**: Eliminate redundant document conversions through intelligent caching with memory and filesystem persistence.
+
+**Features**:
+- **In-Memory LRU Cache**: Configurable size limits with least-recently-used eviction
+- **Optional Filesystem Cache**: Persistent cache with configurable directory location
+- **Smart Cache Keys**: Generated from `hash(document_path + page_number + ImageOptions + FilterOptions)`
+- **TTL Support**: Time-based expiration with manual invalidation capability
+- **Thread-Safe**: Concurrent access support for web service integration
+
+**Implementation**:
+```go
+type Cache interface {
+    Get(key string) ([]byte, bool)
+    Set(key string, data []byte)
+    Invalidate(key string)
+    Clear()
+}
+
+type CacheConfig struct {
+    Enabled     *bool         `json:"enabled,omitempty"`
+    MaxSizeMB   int           `json:"max_size_mb,omitempty"`
+    Directory   string        `json:"directory,omitempty"`
+    TTL         time.Duration `json:"ttl,omitempty"`
+}
+```
+
+### B. Image Enhancement Filters
+
+**Package**: `pkg/document/` (extends existing Page interface)
+
+**Purpose**: Post-generation image quality optimization through ImageMagick filter parameters.
+
+**Features**:
+- **Adjustment Filters**:
+  - Contrast adjustment (-100 to +100)
+  - Saturation adjustment (-100 to +100)
+  - Brightness adjustment (-100 to +100)
+- **Correction Filters**:
+  - Rotation and skew correction
+  - Histogram equalization
+  - Color space adjustments
+- **Non-Destructive**: Filters applied to cached original images on-demand
+- **New Interface Method**: `ToImageWithFilters(opts ImageOptions, filters FilterOptions) ([]byte, error)`
+
+**Implementation**:
+```go
+type FilterOptions struct {
+    Contrast   *int `json:"contrast,omitempty"`    // -100 to +100
+    Saturation *int `json:"saturation,omitempty"`  // -100 to +100
+    Brightness *int `json:"brightness,omitempty"`  // -100 to +100
+    Rotation   *int `json:"rotation,omitempty"`    // degrees
+}
+
+// Extended Page interface
+type Page interface {
+    Number() int
+    ToImage(opts ImageOptions) ([]byte, error)
+    ToImageWithFilters(opts ImageOptions, filters FilterOptions) ([]byte, error)
+}
+```
+
+### C. Configuration JSON Support
+
+**Package**: `pkg/config/` (new package)
+
+**Purpose**: Enable JSON-based configuration for web service integration with validation.
+
+**Features**:
+- **JSON Marshaling**: Add tags to `ImageOptions` and `FilterOptions`
+- **Validation Layer**:
+  - DPI range validation (72-600)
+  - JPEG quality validation (1-100)
+  - Filter parameter bounds checking (-100 to +100 for adjustments)
+- **Error Types**: Detailed validation failure messages
+- **Thread-Safe**: Configuration handling for concurrent requests
+- **Default Handling**: Pointer-based fields distinguish "not set" from "zero value"
+
+**Implementation**:
+```go
+type DocumentConfig struct {
+    Cache   CacheConfig   `json:"cache,omitempty"`
+    Image   ImageConfig   `json:"image,omitempty"`
+    Filters FilterConfig  `json:"filters,omitempty"`
+}
+
+type ImageConfig struct {
+    Format  *string `json:"format,omitempty"`   // "png" or "jpg"
+    Quality *int    `json:"quality,omitempty"`  // 1-100
+    DPI     *int    `json:"dpi,omitempty"`      // 72-600
+}
+
+// Validation
+func (c *ImageConfig) Validate() error
+func (c *ImageConfig) ToImageOptions() ImageOptions
+```
+
+### Phase 2 Success Criteria
+
+- ✅ Image caching reduces redundant conversions (measurable performance improvement)
+- ✅ Enhancement filters enable document clarity optimization for classification accuracy
+- ✅ JSON configuration enables web service integration (agent-lab ready)
+- ✅ Thread-safe concurrent operations validated under load
+- ✅ 80%+ test coverage maintained across all new packages
+- ✅ Ready for v0.1.0 pre-release
+
+### Implementation Order
+
+1. **pkg/config/** - Configuration infrastructure (foundation for other packages)
+2. **pkg/cache/** - Caching with LRU and filesystem persistence
+3. **pkg/document/** - Extend Page interface with filter support
+4. **Integration** - End-to-end testing and agent-lab validation
+
+## v1.0.0+ Future Enhancements
 
 ### Additional Document Formats
 
@@ -151,11 +279,10 @@ The library will expand to support common document formats using appropriate pro
 - Overlapping contexts for continuity
 - Token budget management
 
-**Optimization**:
-- Parallel page processing for multi-page documents
-- Streaming support for large files
-- Memory-efficient processing
-- Caching for repeated operations
+**Streaming Support**:
+- Streaming support for large file sets
+- Memory-efficient processing for batch operations
+- Progressive document loading
 
 **Error Handling**:
 - Graceful degradation for partially corrupt documents
@@ -249,24 +376,32 @@ This approach:
 
 ### Pre-Release Development
 
-The library is currently in pre-release development and has not yet reached v0.1.0. The API is subject to change as features are added and refined.
+The library is currently in pre-release development and has not yet reached v0.1.0. The API is subject to change as Phase 2 features are added and refined.
 
-**Development Focus**:
-- Stabilize core abstractions (Document, Page interfaces)
-- Add support for Office document formats
-- Implement text extraction alternatives
-- Validate API design through usage patterns
+**Development Focus (Phase 2)**:
+- Image caching infrastructure (LRU + filesystem)
+- Image enhancement filters (ImageMagick parameters)
+- JSON configuration marshaling and validation
+- Thread-safe concurrent operations
+- Web service readiness for agent-lab integration
+
+**Post-v0.1.0 Development**:
+- Office document format support (v1.0.0+)
+- Text extraction alternatives (v1.0.0+)
+- Additional output formats (v1.0.0+)
 
 ### Version 0.1.0 Goals
 
 The first versioned release will include:
 - ✅ PDF support (complete)
 - ✅ Image encoding (complete)
-- ⬜ Office document support (OpenXML)
-- ⬜ Text extraction capabilities
+- ⬜ Image caching infrastructure (LRU + filesystem)
+- ⬜ Image enhancement filters (contrast, saturation, brightness)
+- ⬜ JSON configuration marshaling and validation
+- ⬜ Thread-safe concurrent request handling
 - ⬜ Comprehensive documentation
 - ⬜ 80%+ test coverage
-- ⬜ Real-world usage validation
+- ⬜ Agent-lab integration validation
 
 ### Semantic Versioning
 
