@@ -122,123 +122,555 @@ Converts image bytes to base64 data URIs for direct embedding:
 
 ## v0.1.0 Completion Roadmap (Phase 2)
 
-The following features complete the v0.1.0 release, adding web service readiness and performance optimization capabilities:
+Phase 2 completes the v0.1.0 release by adding web service readiness capabilities: persistent image caching for evaluation and verification, enhancement filters for document clarity optimization, and JSON configuration support for web service integration.
 
-### A. Image Caching Infrastructure
+### Architecture Decisions
 
-**Package**: `pkg/cache/`
+The following architectural decisions were established during Phase 2 planning and guide all implementation sessions:
 
-**Purpose**: Eliminate redundant document conversions through intelligent caching with memory and filesystem persistence.
+**Configuration Strategy**:
+- Rename `ImageOptions` → `ImageConfig` and move to `pkg/config/` following go-agents patterns
+- Integrate filter parameters directly into `ImageConfig` (brightness, contrast, saturation, rotation)
+- Use pointer fields (`*int`) only for optional parameters without meaningful zero values
+- Follow go-agents config patterns: JSON tags (snake_case), `Default*()` functions, `Merge()` methods
 
-**Features**:
-- **In-Memory LRU Cache**: Configurable size limits with least-recently-used eviction
-- **Optional Filesystem Cache**: Persistent cache with configurable directory location
-- **Smart Cache Keys**: Generated from `hash(document_path + page_number + ImageOptions + FilterOptions)`
-- **TTL Support**: Time-based expiration with manual invalidation capability
-- **Thread-Safe**: Concurrent access support for web service integration
+**Cache Purpose and Design**:
+- Primary purpose: Persistent storage for generated images enabling visual evaluation and accuracy verification
+- Not for performance optimization (no in-memory LRU layer)
+- Interface-based design agnostic to storage mechanism (filesystem, blob storage, SQL, etc.)
+- Registry pattern following go-agents provider registry for pluggable implementations
+- Filesystem cache as initial reference implementation
 
-**Implementation**:
-```go
-type Cache interface {
-    Get(key string) ([]byte, bool)
-    Set(key string, data []byte)
-    Invalidate(key string)
-    Clear()
-}
+**Cache Registry Pattern**:
+- Registry structure with thread-safe registration and lookup (`sync.RWMutex`)
+- Factory functions: `type Factory func(c *config.CacheConfig) (Cache, error)`
+- Azure-style validation: extract options from `map[string]any`, validate immediately in factory
+- Implementations register in `init()` functions
+- Clear error messages for missing or invalid configurations
 
-type CacheConfig struct {
-    Enabled     *bool         `json:"enabled,omitempty"`
-    MaxSizeMB   int           `json:"max_size_mb,omitempty"`
-    Directory   string        `json:"directory,omitempty"`
-    TTL         time.Duration `json:"ttl,omitempty"`
-}
+**Logging Strategy**:
+- Define `Logger` interface in `pkg/cache/` with Debug/Info/Warn/Error methods
+- Optional logging via `NoOpLogger` as default (no nil checks needed)
+- Applications provide slog adapters or custom implementations
+- Log levels: Debug (cache hits/misses), Info (initialization), Warn (issues), Error (failures)
+- Follows "Interface-Based Layer Interconnection" principle from CLAUDE.md
+
+**Filter Integration**:
+- Filters are part of image conversion process, not separate operations
+- Applied via ImageMagick parameters: rotation → brightness/saturation → contrast
+- Parameter mappings: Brightness/Saturation (-100 to +100) → ImageMagick (0 to 200)
+- Only add filter arguments when config fields are non-nil
+
+**Examples Structure**:
+- Follow go-agents-orchestration patterns: one directory per example
+- Each example: `main.go` + comprehensive `README.md`
+- Progressive complexity: basic conversion → filters → caching
+- Use slog JSON handler for observability
+- Numbered output sections with progress indicators (✓)
+
+### Development Sessions
+
+Phase 2 is broken down into eight focused development sessions, organized from lowest to highest level dependencies. Each session is designed to be executed as an isolated Claude Code session with clear deliverables.
+
+#### Session 1: Configuration Foundation
+
+**Goal**: Establish `pkg/config/` with `ImageConfig` and `CacheConfig` following go-agents patterns
+
+**Tasks**:
+1. Create `pkg/config/` package structure (doc.go, image.go, cache.go)
+2. Migrate `ImageOptions` → `ImageConfig` from `pkg/document/document.go` to `pkg/config/image.go`
+3. Add JSON tags following go-agents conventions (snake_case, `omitempty`)
+4. Add filter fields: `Brightness *int`, `Contrast *int`, `Saturation *int`, `Rotation *int`
+5. Implement `DefaultImageConfig()` function with sensible defaults
+6. Implement `Merge(source *ImageConfig)` method for config composition
+7. Define `CacheConfig` structure:
+   ```go
+   type CacheConfig struct {
+       Name    string         `json:"name"`              // Registry lookup name
+       Options map[string]any `json:"options,omitempty"` // Implementation-specific
+   }
+   ```
+8. Document expected options for filesystem cache in code comments
+9. Update all existing code to import and use `config.ImageConfig`
+10. Update test files to use new config package
+11. Create comprehensive tests in `tests/config/`:
+    - JSON marshaling/unmarshaling
+    - Default value creation
+    - Merge operations
+    - Round-trip serialization
+
+**Deliverables**:
+- ✅ `pkg/config/` package complete with doc.go, image.go, cache.go
+- ✅ `ImageConfig` with filter fields and JSON support
+- ✅ `CacheConfig` structure defined
+- ✅ All existing code updated to use `config.ImageConfig`
+- ✅ Tests with 80%+ coverage
+
+**Estimated Effort**: 2-3 hours
+
+---
+
+#### Session 2: Cache Interface, Logging, and Key Generation
+
+**Goal**: Define cache abstraction, logging interface, and deterministic cache key generation
+
+**Tasks**:
+1. Create `pkg/cache/cache.go` with `Cache` interface:
+   ```go
+   type Cache interface {
+       Get(key string) ([]byte, bool)
+       Set(key string, data []byte) error
+       Invalidate(key string) error
+       Clear() error
+   }
+   ```
+2. Define `Logger` interface in same file:
+   ```go
+   type Logger interface {
+       Debug(msg string, args ...interface{})
+       Info(msg string, args ...interface{})
+       Warn(msg string, args ...interface{})
+       Error(msg string, args ...interface{})
+   }
+   ```
+3. Implement `NoOpLogger` struct with no-op methods for all log levels
+4. Implement `GenerateKey(docPath string, pageNum int, cfg config.ImageConfig) string`:
+   - Normalize document path with `filepath.Abs()`
+   - Serialize: `docPath|pageNum|format|quality|dpi|brightness|contrast|saturation|rotation`
+   - Handle nil pointers by omitting from serialization
+   - Hash with `crypto/sha256`
+   - Return hex-encoded hash string
+5. Create `tests/cache/cache_test.go`:
+   - Test key generation determinism (same inputs → same key)
+   - Test different inputs → different keys
+   - Test with nil filter pointer fields
+   - Test path normalization (relative vs absolute paths)
+
+**Deliverables**:
+- ✅ `Cache` interface defined
+- ✅ `Logger` interface defined with NoOpLogger implementation
+- ✅ `GenerateKey()` function with deterministic hashing
+- ✅ Tests verifying key generation correctness
+- ✅ Documentation of key format and algorithm
+
+**Estimated Effort**: 2-3 hours
+
+---
+
+#### Session 3: Cache Registry Infrastructure
+
+**Goal**: Implement registry system for pluggable cache implementations
+
+**Tasks**:
+1. Create `pkg/cache/registry.go` with registry structure:
+   ```go
+   type Factory func(c *config.CacheConfig) (Cache, error)
+
+   type registry struct {
+       factories map[string]Factory
+       mu        sync.RWMutex
+   }
+
+   var register = &registry{
+       factories: make(map[string]Factory),
+   }
+   ```
+2. Implement `Register(name string, factory Factory)`:
+   - Thread-safe write lock
+   - Store factory in map
+3. Implement `Create(c *config.CacheConfig) (Cache, error)`:
+   - Thread-safe read lock
+   - Lookup factory by name
+   - Return error if not found: `"unknown cache type: %s"`
+   - Call factory function with config
+4. Implement `ListCaches() []string`:
+   - Thread-safe read lock
+   - Return sorted list of registered names
+5. Create `tests/cache/registry_test.go`:
+   - Test registration of mock cache factory
+   - Test `Create()` with valid cache name
+   - Test `Create()` with invalid cache name (error case)
+   - Test `ListCaches()` returns all registered names
+   - Test thread safety with concurrent registration and lookup
+
+**Deliverables**:
+- ✅ Registry infrastructure complete
+- ✅ Thread-safe registration and lookup
+- ✅ Clear error messages for unknown cache types
+- ✅ Tests with 80%+ coverage including concurrency tests
+
+**Estimated Effort**: 1-2 hours
+
+---
+
+#### Session 4: Filesystem Cache Implementation
+
+**Goal**: Implement filesystem cache with validation, logging, and persistence
+
+**Tasks**:
+1. Create `pkg/cache/filesystem.go` with `FilesystemCache` struct:
+   ```go
+   type FilesystemCache struct {
+       directory string
+       logger    Logger
+   }
+   ```
+2. Implement `NewFilesystem(c *config.CacheConfig) (Cache, error)` factory:
+   - Extract `directory` from `c.Options["directory"]`
+   - Validate required: return error if missing or empty
+   - Normalize path with `filepath.Abs()`
+   - Create directory if missing with 0755 permissions
+   - Validate directory is writable (attempt to create temp file)
+   - Extract optional `logger` from `c.Options["logger"]`, default to NoOpLogger
+   - Return fully-initialized FilesystemCache
+3. Implement `Get(key string) ([]byte, bool)`:
+   - Detect file extension from existing cache files (`.png`, `.jpg`)
+   - Read file with `os.ReadFile()`
+   - Log debug: `"cache.get"`, key, found status
+   - Return (data, true) on success, (nil, false) if not found
+   - Distinguish "not found" from actual errors (only return false for ENOENT)
+4. Implement `Set(key string, data []byte) error`:
+   - Detect image format from data header (PNG: `0x89 'P'`, JPEG: `0xFF 0xD8`)
+   - Determine file extension (`.png` or `.jpg`)
+   - Write file atomically with `os.WriteFile(filepath.Join(directory, key+ext), data, 0644)`
+   - Log debug: `"cache.set"`, key, size
+   - Return error on failure with context
+5. Implement `Invalidate(key string) error`:
+   - Check for both `.png` and `.jpg` extensions
+   - Remove file with `os.Remove()`
+   - Log debug: `"cache.invalidate"`, key
+   - Return nil if file doesn't exist (already invalidated)
+6. Implement `Clear() error`:
+   - Read directory with `os.ReadDir()`
+   - Remove only `.cache`, `.png`, `.jpg` files (safety: don't remove unknown files)
+   - Log info: `"cache.clear"`, file count
+   - Return error on failure
+7. Update `pkg/cache/registry.go` init():
+   ```go
+   func init() {
+       Register("filesystem", NewFilesystem)
+   }
+   ```
+8. Create `tests/cache/filesystem_test.go`:
+   - Test factory validation (missing directory, invalid path)
+   - Test directory auto-creation
+   - Test Get/Set/Invalidate/Clear operations with temp directories
+   - Test error conditions (permission denied simulations)
+   - Test concurrent access (multiple goroutines)
+   - Test logging (use mock logger to verify log calls)
+
+**Deliverables**:
+- ✅ `FilesystemCache` implementation complete
+- ✅ Registered in cache registry
+- ✅ Atomic file operations with proper error handling
+- ✅ Logging integrated at appropriate levels
+- ✅ Thread-safe concurrent access
+- ✅ Tests with 80%+ coverage
+- ✅ Clear error messages with context
+
+**Estimated Effort**: 3-4 hours
+
+---
+
+#### Session 5: ImageMagick Filter Integration
+
+**Goal**: Extend PDF image generation to support filter parameters via ImageMagick
+
+**Tasks**:
+1. Update `PDFPage.ToImage()` in `pkg/document/pdf.go` to use filter fields from `config.ImageConfig`
+2. Create helper function `buildImageMagickArgs(page int, opts config.ImageConfig, outputPath string) []string`:
+   - Base arguments: `"-density", strconv.Itoa(dpi), inputPath + "[" + page + "]", "-background", "white", "-flatten"`
+   - Add rotation if `opts.Rotation != nil`: `"-rotate", strconv.Itoa(*opts.Rotation)`
+   - Add brightness/saturation if either is non-nil:
+     - Convert: Brightness (-100 to +100) → `brightness = *opts.Brightness + 100` (0 to 200)
+     - Convert: Saturation (-100 to +100) → `saturation = *opts.Saturation + 100` (0 to 200)
+     - Add: `"-modulate", fmt.Sprintf("%d,%d", brightness, saturation)`
+   - Add contrast if `opts.Contrast != nil`: `"-brightness-contrast", fmt.Sprintf("%dx0", *opts.Contrast)`
+   - Add output path
+   - Return complete argument slice
+3. Update `PDFPage.ToImage()` to call `buildImageMagickArgs()` and execute command
+4. Add validation safety checks (optional, for robustness):
+   - Clamp filter values to valid ranges if out of bounds
+   - Log warnings for out-of-range values
+5. Update `tests/document/pdf_test.go`:
+   - Test image generation with each filter individually (brightness only, contrast only, etc.)
+   - Test image generation with all filters combined
+   - Test with nil filter values (default ImageMagick behavior)
+   - Validate generated images (magic bytes correct, file size reasonable)
+   - Test filter value ranges (ensure ImageMagick accepts converted values)
+6. Add code comments documenting:
+   - Filter parameter ranges and meanings
+   - ImageMagick command structure and argument order
+   - Parameter conversion formulas
+
+**Deliverables**:
+- ✅ Filter support integrated in `PDFPage.ToImage()`
+- ✅ Helper function for command construction
+- ✅ Tests validating filter application
+- ✅ Documentation of filter parameters and ImageMagick mappings
+- ✅ Code comments explaining conversion logic
+
+**Estimated Effort**: 2-3 hours
+
+---
+
+#### Session 6: Cache Integration with Document Processing
+
+**Goal**: Integrate cache into PDF document operations with transparent caching
+
+**Tasks**:
+1. Add `cache` field to `PDFDocument` struct in `pkg/document/pdf.go`:
+   ```go
+   type PDFDocument struct {
+       path  string
+       doc   *pdfcpu.PDFDocument
+       cache cache.Cache  // Optional, may be nil
+   }
+   ```
+2. Update `OpenPDF()` signature to accept optional cache:
+   ```go
+   func OpenPDF(path string, cache cache.Cache) (*PDFDocument, error)
+   ```
+   - Store cache in struct (may be nil for no caching)
+3. Add parent document reference to `PDFPage`:
+   ```go
+   type PDFPage struct {
+       doc    *PDFDocument  // Parent document for cache access
+       number int
+   }
+   ```
+4. Update `ExtractPage()` and `ExtractAllPages()` to set parent reference
+5. Update `PDFPage.ToImage()` to integrate caching:
+   - Import `pkg/cache` package
+   - Before generation: check cache if available
+     ```go
+     if p.doc.cache != nil {
+         key := cache.GenerateKey(p.doc.path, p.number, opts)
+         if data, ok := p.doc.cache.Get(key); ok {
+             return data, nil  // Cache hit
+         }
+     }
+     ```
+   - Generate image (existing logic)
+   - After generation: store in cache if available
+     ```go
+     if p.doc.cache != nil {
+         key := cache.GenerateKey(p.doc.path, p.number, opts)
+         _ = p.doc.cache.Set(key, imageData)  // Ignore cache errors
+     }
+     ```
+6. Error handling strategy:
+   - Cache read failures (except ENOENT) should log warning but not fail generation
+   - Cache write failures should log warning but return generated image
+   - Always prioritize returning image data over cache operations
+7. Update `tests/document/pdf_test.go`:
+   - Test with cache enabled (verify cache hits after first generation)
+   - Test with cache disabled (nil cache, existing behavior)
+   - Test cache persistence across multiple `ToImage()` calls
+   - Test with different `ImageConfig` values produce different cache keys
+   - Test graceful degradation (cache failures don't break image generation)
+8. Update integration example in code comments
+
+**Deliverables**:
+- ✅ Cache integration in `PDFDocument` and `PDFPage`
+- ✅ Transparent caching with cache-miss fallback
+- ✅ Graceful cache error handling (failures don't break generation)
+- ✅ Tests validating cache behavior
+- ✅ Updated code examples showing cache usage
+
+**Estimated Effort**: 2-3 hours
+
+---
+
+#### Session 7: Examples and Documentation
+
+**Goal**: Create example programs demonstrating library features and comprehensive documentation
+
+**Tasks**:
+1. Create `examples/` directory structure:
+   ```
+   examples/
+   ├── README.md                          # Overview of all examples
+   ├── 01-basic-conversion/
+   │   ├── main.go
+   │   ├── README.md
+   │   └── sample.pdf                     # Small sample PDF
+   ├── 02-filter-usage/
+   │   ├── main.go
+   │   ├── README.md
+   │   └── sample.pdf
+   └── 03-caching/
+       ├── main.go
+       ├── README.md
+       ├── config.json                    # Example cache config
+       └── sample.pdf
+   ```
+2. Implement `01-basic-conversion/main.go`:
+   - Simple PDF to image conversion
+   - Demonstrates basic `OpenPDF()` and `ToImage()` usage
+   - Shows both PNG and JPEG output
+   - Uses slog JSON handler for observability
+   - Numbered output sections with progress indicators (✓)
+3. Implement `02-filter-usage/main.go`:
+   - Demonstrates filter parameters
+   - Shows before/after with different filter combinations
+   - Saves images to disk for visual comparison
+   - Documents filter parameter effects
+4. Implement `03-caching/main.go`:
+   - Demonstrates cache configuration and usage
+   - Loads `CacheConfig` from JSON file
+   - Creates cache from registry
+   - Processes same PDF twice, showing cache hit on second pass
+   - Includes timing metrics to show cache benefits
+5. Write comprehensive README.md for each example:
+   - Purpose and scenario
+   - Prerequisites (Go version, ImageMagick)
+   - Running instructions (`go run main.go`)
+   - Expected output (verbatim sample)
+   - Configuration options and customization
+   - Key concepts demonstrated
+6. Create `examples/README.md`:
+   - Overview of all examples
+   - Progressive complexity explanation
+   - Links to individual example READMEs
+7. Update root `README.md`:
+   - Add prerequisites section (Go 1.25.2+, ImageMagick 7.0+)
+   - Add cache configuration examples
+   - Add filter usage examples with code snippets
+   - Update installation/usage sections
+   - Link to examples directory
+8. Update `ARCHITECTURE.md`:
+   - Document cache architecture (interface, registry, implementations)
+   - Document `ImageConfig` structure including filter parameters
+   - Document cache key generation algorithm
+   - Add logging integration details
+   - Update package structure diagram
+9. Update `PROJECT.md`:
+   - Mark Phase 2 checklist items complete (✅)
+   - Document architectural decisions made during implementation
+   - Update version 0.1.0 goals progress
+
+**Deliverables**:
+- ✅ Three complete, runnable examples with READMEs
+- ✅ Examples follow go-agents-orchestration patterns
+- ✅ Updated README.md with cache and filter documentation
+- ✅ Updated ARCHITECTURE.md with Phase 2 details
+- ✅ Updated PROJECT.md with completion status
+
+**Estimated Effort**: 3-4 hours
+
+---
+
+#### Session 8: Integration Testing and Validation
+
+**Goal**: End-to-end validation, performance verification, and v0.1.0 readiness confirmation
+
+**Tasks**:
+1. Create `tests/integration/` directory for integration tests:
+   - `document_cache_test.go` - End-to-end cache integration
+   - `concurrent_test.go` - Concurrency and thread-safety validation
+2. Implement `document_cache_test.go`:
+   - Load `CacheConfig` from JSON
+   - Create cache from registry
+   - Process PDF with cache enabled
+   - Verify cache hits on repeated operations
+   - Test with different filter configurations
+   - Verify cached images are identical to generated images (byte-for-byte comparison)
+3. Implement `concurrent_test.go`:
+   - Multiple goroutines processing same document concurrently
+   - Verify thread-safe cache access (no race conditions)
+   - Verify correct image generation under concurrent load
+   - Test cache under concurrent writes to same keys
+   - Use `testing.T.Parallel()` for parallel execution
+4. Create `tests/document/pdf_benchmark_test.go`:
+   - Benchmark `ToImage()` without cache (baseline)
+   - Benchmark `ToImage()` with cache miss (includes cache write overhead)
+   - Benchmark `ToImage()` with cache hit (should be significantly faster)
+   - Measure cache overhead (miss vs no cache)
+   - Document expected performance characteristics
+5. Run comprehensive test validation:
+   - `go test ./...` - all tests pass
+   - `go test -race ./...` - no race conditions detected
+   - `go test -cover ./...` - verify 80%+ coverage across all packages
+   - `go test -bench=. ./...` - run benchmarks, document results
+6. Validate Phase 2 success criteria:
+   - ✅ Image caching reduces redundant conversions (measurable via benchmarks)
+   - ✅ Enhancement filters enable document clarity optimization
+   - ✅ JSON configuration enables web service integration
+   - ✅ Thread-safe concurrent operations validated under load
+   - ✅ 80%+ test coverage maintained across all packages
+   - ✅ Ready for v0.1.0 pre-release
+7. Create performance summary document (optional):
+   - Benchmark results
+   - Cache effectiveness metrics
+   - Memory usage characteristics
+   - Recommendations for production deployment
+8. Final verification checklist:
+   - All examples run successfully
+   - All tests pass (unit, integration, concurrency)
+   - Documentation is complete and accurate
+   - Code follows CLAUDE.md design principles
+   - Ready for version tag
+
+**Deliverables**:
+- ✅ Integration test suite complete
+- ✅ Concurrency tests passing with `-race` flag
+- ✅ Performance benchmarks showing cache effectiveness
+- ✅ All Phase 2 success criteria validated
+- ✅ 80%+ test coverage confirmed
+- ✅ Project ready for v0.1.0 tag
+
+**Estimated Effort**: 3-4 hours
+
+---
+
+### Success Criteria
+
+Phase 2 is complete when all of the following criteria are met:
+
+- ✅ **Image caching reduces redundant conversions**: Benchmarks demonstrate measurable performance improvement for cache hits vs generation
+- ✅ **Enhancement filters enable document clarity optimization**: All filter parameters (brightness, contrast, saturation, rotation) work correctly via ImageMagick
+- ✅ **JSON configuration enables web service integration**: `CacheConfig` and `ImageConfig` fully support JSON marshaling with validation
+- ✅ **Thread-safe concurrent operations validated**: Concurrency tests pass with `-race` flag, demonstrating safe concurrent cache access
+- ✅ **80%+ test coverage maintained**: All packages (config, cache, document) have comprehensive test coverage
+- ✅ **Examples demonstrate library usage**: Three complete examples show basic conversion, filters, and caching
+- ✅ **Documentation is comprehensive**: README, ARCHITECTURE, and PROJECT docs fully updated
+- ✅ **Ready for v0.1.0 pre-release**: All features implemented, tested, and documented
+
+### Estimated Total Effort
+
+- **Session 1**: 2-3 hours (configuration foundation)
+- **Session 2**: 2-3 hours (cache interface, logging, key generation)
+- **Session 3**: 1-2 hours (registry infrastructure)
+- **Session 4**: 3-4 hours (filesystem cache implementation)
+- **Session 5**: 2-3 hours (ImageMagick filter integration)
+- **Session 6**: 2-3 hours (cache integration with documents)
+- **Session 7**: 3-4 hours (examples and documentation)
+- **Session 8**: 3-4 hours (integration testing and validation)
+
+**Total**: ~18-26 hours of focused development time
+
+### Session Dependencies
+
+```
+Session 1 (Config Foundation)
+    ↓
+Session 2 (Cache Interface & Key Generation)
+    ↓
+Session 3 (Cache Registry)
+    ↓
+Session 4 (Filesystem Cache) ←──┐
+    ↓                           │
+Session 5 (Filter Integration) ─┤ (Sessions 5 & 6 could be parallel)
+    ↓                           │
+Session 6 (Cache Integration) ←─┘
+    ↓
+Session 7 (Examples & Documentation)
+    ↓
+Session 8 (Integration Testing)
 ```
 
-### B. Image Enhancement Filters
-
-**Package**: `pkg/document/` (extends existing Page interface)
-
-**Purpose**: Post-generation image quality optimization through ImageMagick filter parameters.
-
-**Features**:
-- **Adjustment Filters**:
-  - Contrast adjustment (-100 to +100)
-  - Saturation adjustment (-100 to +100)
-  - Brightness adjustment (-100 to +100)
-- **Correction Filters**:
-  - Rotation and skew correction
-  - Histogram equalization
-  - Color space adjustments
-- **Non-Destructive**: Filters applied to cached original images on-demand
-- **New Interface Method**: `ToImageWithFilters(opts ImageOptions, filters FilterOptions) ([]byte, error)`
-
-**Implementation**:
-```go
-type FilterOptions struct {
-    Contrast   *int `json:"contrast,omitempty"`    // -100 to +100
-    Saturation *int `json:"saturation,omitempty"`  // -100 to +100
-    Brightness *int `json:"brightness,omitempty"`  // -100 to +100
-    Rotation   *int `json:"rotation,omitempty"`    // degrees
-}
-
-// Extended Page interface
-type Page interface {
-    Number() int
-    ToImage(opts ImageOptions) ([]byte, error)
-    ToImageWithFilters(opts ImageOptions, filters FilterOptions) ([]byte, error)
-}
-```
-
-### C. Configuration JSON Support
-
-**Package**: `pkg/config/` (new package)
-
-**Purpose**: Enable JSON-based configuration for web service integration with validation.
-
-**Features**:
-- **JSON Marshaling**: Add tags to `ImageOptions` and `FilterOptions`
-- **Validation Layer**:
-  - DPI range validation (72-600)
-  - JPEG quality validation (1-100)
-  - Filter parameter bounds checking (-100 to +100 for adjustments)
-- **Error Types**: Detailed validation failure messages
-- **Thread-Safe**: Configuration handling for concurrent requests
-- **Default Handling**: Pointer-based fields distinguish "not set" from "zero value"
-
-**Implementation**:
-```go
-type DocumentConfig struct {
-    Cache   CacheConfig   `json:"cache,omitempty"`
-    Image   ImageConfig   `json:"image,omitempty"`
-    Filters FilterConfig  `json:"filters,omitempty"`
-}
-
-type ImageConfig struct {
-    Format  *string `json:"format,omitempty"`   // "png" or "jpg"
-    Quality *int    `json:"quality,omitempty"`  // 1-100
-    DPI     *int    `json:"dpi,omitempty"`      // 72-600
-}
-
-// Validation
-func (c *ImageConfig) Validate() error
-func (c *ImageConfig) ToImageOptions() ImageOptions
-```
-
-### Phase 2 Success Criteria
-
-- ✅ Image caching reduces redundant conversions (measurable performance improvement)
-- ✅ Enhancement filters enable document clarity optimization for classification accuracy
-- ✅ JSON configuration enables web service integration (agent-lab ready)
-- ✅ Thread-safe concurrent operations validated under load
-- ✅ 80%+ test coverage maintained across all new packages
-- ✅ Ready for v0.1.0 pre-release
-
-### Implementation Order
-
-1. **pkg/config/** - Configuration infrastructure (foundation for other packages)
-2. **pkg/cache/** - Caching with LRU and filesystem persistence
-3. **pkg/document/** - Extend Page interface with filter support
-4. **Integration** - End-to-end testing and agent-lab validation
+Sessions 5 and 6 could potentially be executed in parallel since Session 5 extends image generation (filters) while Session 6 adds cache integration. However, executing them sequentially allows for easier testing and validation.
 
 ## v1.0.0+ Future Enhancements
 
