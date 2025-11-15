@@ -3,8 +3,8 @@ package document
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
+	"github.com/JaimeStill/document-context/pkg/image"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
@@ -76,29 +76,8 @@ func (p *PDFPage) Number() int {
 	return p.number
 }
 
-func (p *PDFPage) ToImage(opts ImageOptions) ([]byte, error) {
-	if opts.DPI == 0 {
-		opts = DefaultImageOptions()
-	}
-
-	if opts.Format == JPEG {
-		if opts.Quality == 0 {
-			opts.Quality = 85
-		}
-		if opts.Quality < 1 || opts.Quality > 100 {
-			return nil, fmt.Errorf("JPEG quality must be 1-100, got %d", opts.Quality)
-		}
-	}
-
-	var ext string
-	switch opts.Format {
-	case PNG:
-		ext = "png"
-	case JPEG:
-		ext = "jpg"
-	default:
-		return nil, fmt.Errorf("unsupported image format: %s", opts.Format)
-	}
+func (p *PDFPage) ToImage(renderer image.Renderer) ([]byte, error) {
+	ext := renderer.FileExtension()
 
 	tmpFile, err := os.CreateTemp("", fmt.Sprintf("page-%d-*.%s", p.number, ext))
 	if err != nil {
@@ -108,34 +87,14 @@ func (p *PDFPage) ToImage(opts ImageOptions) ([]byte, error) {
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	pageIndex := p.number - 1
-	inputSpec := fmt.Sprintf("%s[%d]", p.doc.path, pageIndex)
-
-	args := []string{
-		"-density", fmt.Sprintf("%d", opts.DPI),
-		inputSpec,
-		"-background", "white",
-		"-flatten",
-	}
-
-	if opts.Format == JPEG {
-		args = append(args, "-quality", fmt.Sprintf("%d", opts.Quality))
-	}
-
-	args = append(args, tmpPath)
-
-	cmd := exec.Command("magick", args...)
-	output, err := cmd.CombinedOutput()
+	err = renderer.Render(p.doc.path, p.number, tmpPath)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"imagemagick failed for page %d: %w\nOutput: %s",
-			p.number, err, string(output),
-		)
+		return nil, fmt.Errorf("failed to render page %d: %w", p.number, err)
 	}
 
 	imgData, err := os.ReadFile(tmpPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read generated image: %w", err)
+		return nil, fmt.Errorf("failed to read rendered image: %w", err)
 	}
 
 	return imgData, nil

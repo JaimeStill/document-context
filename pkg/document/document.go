@@ -1,6 +1,10 @@
 package document
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/JaimeStill/document-context/pkg/image"
+)
 
 type ImageFormat string
 
@@ -20,20 +24,6 @@ func (f ImageFormat) MimeType() (string, error) {
 	}
 }
 
-type ImageOptions struct {
-	Format  ImageFormat
-	Quality int
-	DPI     int
-}
-
-func DefaultImageOptions() ImageOptions {
-	return ImageOptions{
-		Format:  PNG,
-		Quality: 0,
-		DPI:     300,
-	}
-}
-
 type Document interface {
 	PageCount() int
 	ExtractPage(pageNum int) (Page, error)
@@ -43,5 +33,5 @@ type Document interface {
 
 type Page interface {
 	Number() int
-	ToImage(opts ImageOptions) ([]byte, error)
+	ToImage(renderer image.Renderer) ([]byte, error)
 }

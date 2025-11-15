@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/JaimeStill/document-context/pkg/config"
 	"github.com/JaimeStill/document-context/pkg/document"
+	"github.com/JaimeStill/document-context/pkg/image"
 )
 
 func testPDFPath(t *testing.T) string {
@@ -125,12 +127,17 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 		t.Fatalf("ExtractPage failed: %v", err)
 	}
 
-	opts := document.ImageOptions{
-		Format: document.PNG,
+	cfg := config.ImageConfig{
+		Format: "png",
 		DPI:    150,
 	}
 
-	imgData, err := page.ToImage(opts)
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	imgData, err := page.ToImage(renderer)
 	if err != nil {
 		t.Fatalf("ToImage failed: %v", err)
 	}
@@ -162,13 +169,18 @@ func TestPDFPage_ToImage_JPEG(t *testing.T) {
 		t.Fatalf("ExtractPage failed: %v", err)
 	}
 
-	opts := document.ImageOptions{
-		Format:  document.JPEG,
+	cfg := config.ImageConfig{
+		Format:  "jpg",
 		Quality: 85,
 		DPI:     150,
 	}
 
-	imgData, err := page.ToImage(opts)
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	imgData, err := page.ToImage(renderer)
 	if err != nil {
 		t.Fatalf("ToImage failed: %v", err)
 	}
@@ -200,8 +212,15 @@ func TestPDFPage_ToImage_DefaultOptions(t *testing.T) {
 		t.Fatalf("ExtractPage failed: %v", err)
 	}
 
-	// Pass zero-value options to test defaults
-	imgData, err := page.ToImage(document.ImageOptions{})
+	// Pass zero-value config to test Finalize() applying defaults
+	cfg := config.ImageConfig{}
+
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	imgData, err := page.ToImage(renderer)
 	if err != nil {
 		t.Fatalf("ToImage with defaults failed: %v", err)
 	}
