@@ -60,10 +60,25 @@ import (
     "fmt"
     "os"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
 )
 
 func main() {
+    // Create image configuration
+    cfg := config.ImageConfig{
+        Format: "png",
+        DPI:    300,
+    }
+
+    // Transform configuration to renderer
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
+        return
+    }
+
     // Open PDF document
     doc, err := document.OpenPDF("report.pdf")
     if err != nil {
@@ -79,11 +94,8 @@ func main() {
         return
     }
 
-    // Convert to PNG image (300 DPI)
-    imageData, err := page.ToImage(document.ImageOptions{
-        Format: document.PNG,
-        DPI:    300,
-    })
+    // Convert to image using renderer
+    imageData, err := page.ToImage(renderer)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to convert page: %v\n", err)
         return
@@ -111,10 +123,26 @@ import (
     "fmt"
     "os"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
 )
 
 func main() {
+    // Create JPEG configuration with custom quality
+    cfg := config.ImageConfig{
+        Format:  "jpg",
+        Quality: 85,
+        DPI:     150,
+    }
+
+    // Transform to renderer
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
     doc, err := document.OpenPDF("photo-document.pdf")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -128,12 +156,8 @@ func main() {
         return
     }
 
-    // Convert to JPEG with 85% quality at 150 DPI
-    imageData, err := page.ToImage(document.ImageOptions{
-        Format:  document.JPEG,
-        Quality: 85,
-        DPI:     150,
-    })
+    // Convert using renderer
+    imageData, err := page.ToImage(renderer)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -149,7 +173,7 @@ func main() {
 }
 ```
 
-### Using Default Options
+### Using Default Configuration
 
 Simplify conversion with sensible defaults:
 
@@ -160,10 +184,20 @@ import (
     "fmt"
     "os"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
 )
 
 func main() {
+    // Use defaults: PNG format, 300 DPI
+    cfg := config.DefaultImageConfig()
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
     doc, err := document.OpenPDF("contract.pdf")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -177,8 +211,7 @@ func main() {
         return
     }
 
-    // Use defaults: PNG format, 300 DPI
-    imageData, err := page.ToImage(document.DefaultImageOptions())
+    imageData, err := page.ToImage(renderer)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -204,11 +237,21 @@ package main
 import (
     "fmt"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
     "github.com/JaimeStill/document-context/pkg/encoding"
+    "github.com/JaimeStill/document-context/pkg/image"
 )
 
 func main() {
+    // Create renderer with defaults
+    cfg := config.DefaultImageConfig()
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
     doc, err := document.OpenPDF("analysis.pdf")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -223,7 +266,7 @@ func main() {
     }
 
     // Convert page to image
-    imageData, err := page.ToImage(document.DefaultImageOptions())
+    imageData, err := page.ToImage(renderer)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -239,7 +282,7 @@ func main() {
     // Data URI is now ready for LLM API
     fmt.Printf("Data URI length: %d bytes\n", len(dataURI))
     fmt.Printf("Data URI prefix: %s...\n", dataURI[:50])
-    
+
     // Use dataURI with LLM vision API
     // response := llm.Vision("Analyze this document", []string{dataURI})
 }
@@ -257,10 +300,20 @@ import (
     "os"
     "path/filepath"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
 )
 
 func main() {
+    // Create renderer once, reuse for all pages
+    cfg := config.DefaultImageConfig()
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
     doc, err := document.OpenPDF("multi-page.pdf")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -279,19 +332,19 @@ func main() {
 
     // Convert each page
     for _, page := range pages {
-        imageData, err := page.ToImage(document.DefaultImageOptions())
+        imageData, err := page.ToImage(renderer)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n", 
+            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
                 page.Number(), err)
             continue
         }
 
-        filename := filepath.Join("output", 
+        filename := filepath.Join("output",
             fmt.Sprintf("page-%d.png", page.Number()))
-        
+
         err = os.WriteFile(filename, imageData, 0644)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to write page %d: %v\n", 
+            fmt.Fprintf(os.Stderr, "Failed to write page %d: %v\n",
                 page.Number(), err)
             continue
         }
@@ -314,24 +367,34 @@ import (
     "context"
     "fmt"
 
+    "github.com/JaimeStill/document-context/pkg/config"
     "github.com/JaimeStill/document-context/pkg/document"
     "github.com/JaimeStill/document-context/pkg/encoding"
+    "github.com/JaimeStill/document-context/pkg/image"
     "github.com/JaimeStill/go-agents/pkg/agent"
-    "github.com/JaimeStill/go-agents/pkg/config"
+    agentConfig "github.com/JaimeStill/go-agents/pkg/config"
 )
 
 func main() {
     // Load agent configuration
-    cfg, err := config.LoadAgentConfig("config.json")
+    agentCfg, err := agentConfig.LoadAgentConfig("config.json")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
         return
     }
 
     // Create agent
-    agent, err := agent.New(cfg)
+    agent, err := agent.New(agentCfg)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)
+        return
+    }
+
+    // Create image renderer
+    imgCfg := config.DefaultImageConfig()
+    renderer, err := image.NewImageMagickRenderer(imgCfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to create renderer: %v\n", err)
         return
     }
 
@@ -352,16 +415,16 @@ func main() {
 
     var images []string
     for _, page := range pages {
-        imageData, err := page.ToImage(document.DefaultImageOptions())
+        imageData, err := page.ToImage(renderer)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n", 
+            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
                 page.Number(), err)
             continue
         }
 
         dataURI, err := encoding.EncodeImageDataURI(imageData, document.PNG)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to encode page %d: %v\n", 
+            fmt.Fprintf(os.Stderr, "Failed to encode page %d: %v\n",
                 page.Number(), err)
             continue
         }
@@ -371,8 +434,8 @@ func main() {
 
     // Send to LLM for analysis
     ctx := context.Background()
-    response, err := agent.Vision(ctx, 
-        "Analyze this contract and summarize the key terms", 
+    response, err := agent.Vision(ctx,
+        "Analyze this contract and summarize the key terms",
         images,
     )
     if err != nil {
@@ -387,14 +450,48 @@ func main() {
 
 ## Configuration
 
-### Image Options
+### Image Configuration
+
+The library uses a configuration-to-renderer transformation pattern. Configuration is data, renderers are behavior.
 
 ```go
-type ImageOptions struct {
-    Format  ImageFormat  // PNG or JPEG
-    Quality int          // JPEG quality (1-100), ignored for PNG
-    DPI     int          // Resolution in dots per inch
+type ImageConfig struct {
+    Format     string  // "png" or "jpg"
+    Quality    int     // JPEG quality (1-100), ignored for PNG
+    DPI        int     // Resolution in dots per inch
+    Brightness *int    // -100 to +100 (Session 5)
+    Contrast   *int    // -100 to +100 (Session 5)
+    Saturation *int    // -100 to +100 (Session 5)
+    Rotation   *int    // 0 to 360 degrees (Session 5)
 }
+```
+
+**Filter fields** use pointers to distinguish "not set" (nil) from "explicitly zero" (pointer to 0). Filter application will be implemented in Phase 2 Session 5.
+
+### Creating a Renderer
+
+```go
+// 1. Create configuration
+cfg := config.ImageConfig{
+    Format: "png",
+    DPI:    300,
+}
+
+// 2. Transform to renderer (validates configuration)
+renderer, err := image.NewImageMagickRenderer(cfg)
+if err != nil {
+    // Handle invalid configuration
+}
+
+// 3. Use renderer with pages
+imageData, err := page.ToImage(renderer)
+```
+
+### Using Defaults
+
+```go
+cfg := config.DefaultImageConfig()  // PNG, 300 DPI, no filters
+renderer, _ := image.NewImageMagickRenderer(cfg)
 ```
 
 **Format Selection**:
@@ -412,13 +509,6 @@ type ImageOptions struct {
 - 150: Web images, low resolution
 - 300: Standard print quality, high resolution (default)
 - 600: Professional print, very high resolution
-
-### Default Options
-
-```go
-opts := document.DefaultImageOptions()
-// Returns: PNG format, 300 DPI
-```
 
 ## Testing
 
