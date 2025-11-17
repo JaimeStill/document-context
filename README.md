@@ -27,7 +27,7 @@ This library provides format-agnostic interfaces for document processing with ex
 
 ### Go Version
 
-- Go 1.25.2 or later
+- Go 1.25.4 or later
 
 ### External Dependencies
 
@@ -94,8 +94,8 @@ func main() {
         return
     }
 
-    // Convert to image using renderer
-    imageData, err := page.ToImage(renderer)
+    // Convert to image using renderer (nil = no caching)
+    imageData, err := page.ToImage(renderer, nil)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to convert page: %v\n", err)
         return
@@ -156,8 +156,8 @@ func main() {
         return
     }
 
-    // Convert using renderer
-    imageData, err := page.ToImage(renderer)
+    // Convert using renderer (nil = no caching)
+    imageData, err := page.ToImage(renderer, nil)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -211,7 +211,7 @@ func main() {
         return
     }
 
-    imageData, err := page.ToImage(renderer)
+    imageData, err := page.ToImage(renderer, nil)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -265,8 +265,8 @@ func main() {
         return
     }
 
-    // Convert page to image
-    imageData, err := page.ToImage(renderer)
+    // Convert page to image (nil = no caching)
+    imageData, err := page.ToImage(renderer, nil)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -332,7 +332,7 @@ func main() {
 
     // Convert each page
     for _, page := range pages {
-        imageData, err := page.ToImage(renderer)
+        imageData, err := page.ToImage(renderer, nil)
         if err != nil {
             fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
                 page.Number(), err)
@@ -415,7 +415,7 @@ func main() {
 
     var images []string
     for _, page := range pages {
-        imageData, err := page.ToImage(renderer)
+        imageData, err := page.ToImage(renderer, nil)
         if err != nil {
             fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
                 page.Number(), err)
@@ -483,8 +483,8 @@ if err != nil {
     // Handle invalid configuration
 }
 
-// 3. Use renderer with pages
-imageData, err := page.ToImage(renderer)
+// 3. Use renderer with pages (nil = no caching)
+imageData, err := page.ToImage(renderer, nil)
 ```
 
 ### Using Defaults
@@ -552,11 +552,12 @@ if err != nil {
 
 **Image Conversion Errors**:
 ```go
-imageData, err := page.ToImage(opts)
+imageData, err := page.ToImage(renderer, cache)
 if err != nil {
     // ImageMagick not installed
     // Invalid format or quality settings
     // Insufficient disk space for temp files
+    // Cache storage errors (if cache provided)
 }
 ```
 

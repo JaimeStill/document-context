@@ -137,7 +137,7 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 		t.Fatalf("NewImageMagickRenderer failed: %v", err)
 	}
 
-	imgData, err := page.ToImage(renderer)
+	imgData, err := page.ToImage(renderer, nil)
 	if err != nil {
 		t.Fatalf("ToImage failed: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestPDFPage_ToImage_JPEG(t *testing.T) {
 		t.Fatalf("NewImageMagickRenderer failed: %v", err)
 	}
 
-	imgData, err := page.ToImage(renderer)
+	imgData, err := page.ToImage(renderer, nil)
 	if err != nil {
 		t.Fatalf("ToImage failed: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestPDFPage_ToImage_DefaultOptions(t *testing.T) {
 		t.Fatalf("NewImageMagickRenderer failed: %v", err)
 	}
 
-	imgData, err := page.ToImage(renderer)
+	imgData, err := page.ToImage(renderer, nil)
 	if err != nil {
 		t.Fatalf("ToImage with defaults failed: %v", err)
 	}

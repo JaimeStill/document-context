@@ -3,6 +3,7 @@ package document
 import (
 	"fmt"
 
+	"github.com/JaimeStill/document-context/pkg/cache"
 	"github.com/JaimeStill/document-context/pkg/image"
 )
 
@@ -33,5 +34,5 @@ type Document interface {
 
 type Page interface {
 	Number() int
-	ToImage(renderer image.Renderer) ([]byte, error)
+	ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error)
 }

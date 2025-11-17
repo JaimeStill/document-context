@@ -159,6 +159,7 @@ The same pattern at every layer means the same mental model from code to cloud. 
 - Separate configuration (data) from domain objects (behavior)
 - Use transformation functions (`New*()`) that validate and return interfaces
 - Configuration should never leak into business logic
+- Choose appropriate configuration type: Type 1 (initialization-only, discard after), Type 2 (immutable runtime settings, store directly), or Type 3 (mutable runtime settings, validate mutations)
 
 ### When Building Libraries
 - Module boundaries should be clear and stable

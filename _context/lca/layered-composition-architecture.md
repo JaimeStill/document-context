@@ -94,7 +94,53 @@ Data (Config/Request) → Finalize → Validate → Transform → Behavior (Doma
 
 ## Configuration Transformation Pattern
 
-### Pattern Structure
+### Configuration Types
+
+Configuration serves three distinct purposes at the package layer, each with different lifecycle and persistence characteristics:
+
+**Type 1: Initialization-Only Configuration**
+- Configuration transforms into domain objects and is discarded after initialization
+- Domain object stores resolved objects/interfaces, not the configuration itself
+- Configuration exists only during initialization; domain objects persist throughout runtime
+- Common pattern: String identifiers resolve to interface implementations
+- Example: Observer name → observer interface, renderer name → renderer interface
+
+**Type 2: Immutable Runtime Settings**
+- Configuration represents runtime settings that remain constant after initialization
+- Domain object stores the configuration structure directly as settings (no field extraction/duplication)
+- Settings persist for the lifetime of the domain object, immutable after construction
+- Access via `Settings()` method returning the stored settings
+- Common pattern: Settings needed for operations throughout object lifetime
+- Example: ImageConfig stored as `settings` field in ImageMagickRenderer (format, DPI, quality for cache keys)
+
+**Type 3: Mutable Runtime Settings**
+- Configuration represents runtime settings that can be adjusted during execution
+- Domain object stores configuration privately with controlled mutation through setters
+- Setters validate changes and maintain thread safety (typically with mutex protection)
+- Access via getter/setter methods with validation at each mutation point
+- Common pattern: Operational parameters that need runtime tuning
+- Example: Connection pool limits, cache size adjustments, performance tuning parameters
+
+**Decision Framework**:
+
+Use **Type 1** when:
+- Configuration resolves to objects or interfaces that provide behavior
+- The configuration data itself has no runtime value after initialization
+- Example: String identifiers that resolve to interface implementations
+
+Use **Type 2** when:
+- Configuration represents immutable settings needed throughout object lifetime
+- Settings must be accessible for operations (cache key generation, serialization)
+- No runtime mutation is required
+- Example: Image rendering settings, format conversion parameters
+
+Use **Type 3** when:
+- Settings must be adjustable during runtime (resize limits, tune parameters)
+- Changes require validation to maintain system invariants
+- Thread safety is required for concurrent access to settings
+- Example: Resource pool limits, rate limiting thresholds, cache size bounds
+
+### Pattern Structure (Type 1: Initialization-Only)
 
 ```go
 // 1. Configuration Structure (Data)
@@ -165,7 +211,7 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 }
 ```
 
-### Lifecycle Flow
+### Type 1 Lifecycle Flow (Initialization-Only)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -187,19 +233,20 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 │    - Calls cfg.Finalize() internally                            │
 │    - Validates all fields                                       │
 │    - Returns interface, not concrete type                       │
+│    - Configuration discarded after extraction                   │
 └────────────────────────┬────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. Use Domain Object (Config Discarded)                         │
 │    result, err := obj.Execute()                                 │
 │    - Configuration no longer exists                             │
-│    - Only domain object with behavior                           │
+│    - Only domain object with extracted values/interfaces        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Characteristics
 
-**Configuration (Data)**:
+**Configuration (Data)** - All Types:
 - Serializable structures
 - Default value functions
 - Merge logic for composition
@@ -208,13 +255,30 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 - **No business logic**
 - **No domain knowledge**
 
-**Domain Object (Behavior)**:
+**Domain Object (Behavior)** - Type 1 (Initialization-Only):
 - Created through transformation function
 - Validated during construction
 - Always in valid state
 - Encapsulates business logic
 - Interacts through interfaces
 - **Configuration discarded after creation**
+- Stores extracted values or resolved interfaces
+
+**Domain Object (Behavior)** - Type 2 (Immutable Runtime Settings):
+- Created through transformation function with validation
+- Stores entire configuration structure as `settings` field (no field extraction)
+- Settings accessible via `Settings()` method
+- Settings immutable after construction
+- Settings used throughout object lifetime
+- Example: `renderer.Settings()` returns ImageConfig for cache keys
+
+**Domain Object (Behavior)** - Type 3 (Mutable Runtime Settings):
+- Created through transformation function with initial validation
+- Stores configuration as private `settings` field (not exposed directly)
+- Mutation through validated setter methods
+- Thread-safe access with mutex protection
+- Maintains invariants at each mutation point
+- Example: `pool.SetMaxConnections(n)` validates before updating `settings.MaxConnections`
 
 ---
 
@@ -591,18 +655,13 @@ import "yourproject/pkg/config"
 // Interface defines public API
 type Renderer interface {
     Render(input []byte, inputFormat string) ([]byte, error)
-    SetBrightness(value int) error
-    SetContrast(value int) error
     FileExtension() string
+    Settings() config.ImageConfig  // Type 2: Expose settings for operations like cache keys
 }
 
-// Implementation
+// Implementation - Type 2: Store settings directly
 type imagemagickRenderer struct {
-    format     string
-    quality    int
-    dpi        int
-    brightness int
-    contrast   int
+    settings config.ImageConfig  // Immutable runtime settings
 }
 
 // Constructor returns interface
@@ -618,30 +677,27 @@ func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
         return nil, fmt.Errorf("DPI must be 72-600, got %d", cfg.DPI)
     }
 
-    brightness := 0
-    if cfg.Brightness != nil {
-        if *cfg.Brightness < -100 || *cfg.Brightness > 100 {
-            return nil, fmt.Errorf("brightness must be -100 to +100")
-        }
-        brightness = *cfg.Brightness
+    if cfg.Quality < 1 || cfg.Quality > 100 {
+        return nil, fmt.Errorf("quality must be 1-100, got %d", cfg.Quality)
     }
 
-    contrast := 0
-    if cfg.Contrast != nil {
-        if *cfg.Contrast < -100 || *cfg.Contrast > 100 {
-            return nil, fmt.Errorf("contrast must be -100 to +100")
-        }
-        contrast = *cfg.Contrast
+    if cfg.Brightness != nil && (*cfg.Brightness < -100 || *cfg.Brightness > 100) {
+        return nil, fmt.Errorf("brightness must be -100 to +100")
     }
 
-    // Transform to domain object
+    if cfg.Contrast != nil && (*cfg.Contrast < -100 || *cfg.Contrast > 100) {
+        return nil, fmt.Errorf("contrast must be -100 to +100")
+    }
+
+    // Store config as settings - Type 2 pattern
     return &imagemagickRenderer{
-        format:     cfg.Format,
-        quality:    cfg.Quality,
-        dpi:        cfg.DPI,
-        brightness: brightness,
-        contrast:   contrast,
+        settings: cfg,  // No field extraction/duplication
     }, nil
+}
+
+// Type 2: Expose settings for operations throughout lifetime
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings
 }
 
 func (r *imagemagickRenderer) Render(input []byte, inputFormat string) ([]byte, error) {
@@ -649,25 +705,87 @@ func (r *imagemagickRenderer) Render(input []byte, inputFormat string) ([]byte, 
     return r.execute(input, args)
 }
 
-func (r *imagemagickRenderer) SetBrightness(value int) error {
-    if value < -100 || value > 100 {
-        return fmt.Errorf("brightness must be -100 to +100")
-    }
-    r.brightness = value
-    return nil
-}
-
 func (r *imagemagickRenderer) FileExtension() string {
-    return r.format
+    return r.settings.Format  // Access from stored settings
 }
 
 // Private methods
 func (r *imagemagickRenderer) buildArgs(inputFormat string) []string {
-    // Implementation detail
+    // Use r.settings.DPI, r.settings.Format, r.settings.Brightness, etc.
 }
 
 func (r *imagemagickRenderer) execute(input []byte, args []string) ([]byte, error) {
     // Implementation detail
+}
+```
+
+**Type 3 Example: Mutable Runtime Settings**
+
+```go
+// Type 3: Configuration with mutable runtime settings
+type ConnectionPool struct {
+    mutex    sync.RWMutex
+    settings config.PoolConfig  // Private, mutable through setters
+    conns    []*Connection
+}
+
+func NewConnectionPool(cfg config.PoolConfig) (*ConnectionPool, error) {
+    cfg.Finalize()
+
+    // Validate initial configuration
+    if cfg.MaxConnections < 1 || cfg.MaxConnections > 1000 {
+        return nil, fmt.Errorf("max connections must be 1-1000")
+    }
+
+    if cfg.IdleTimeout < 0 {
+        return nil, fmt.Errorf("idle timeout must be >= 0")
+    }
+
+    pool := &ConnectionPool{
+        settings: cfg,
+        conns:    make([]*Connection, 0, cfg.MaxConnections),
+    }
+
+    return pool, nil
+}
+
+// Read access with read lock
+func (p *ConnectionPool) MaxConnections() int {
+    p.mutex.RLock()
+    defer p.mutex.RUnlock()
+    return p.settings.MaxConnections
+}
+
+// Write access with validation and write lock
+func (p *ConnectionPool) SetMaxConnections(max int) error {
+    // Validate before acquiring lock
+    if max < 1 || max > 1000 {
+        return fmt.Errorf("max connections must be 1-1000, got %d", max)
+    }
+
+    p.mutex.Lock()
+    defer p.mutex.Unlock()
+
+    oldMax := p.settings.MaxConnections
+    p.settings.MaxConnections = max
+
+    // Resize pool if needed
+    if max < oldMax {
+        return p.shrinkPool(max)
+    } else if max > oldMax {
+        return p.expandPool(max)
+    }
+
+    return nil
+}
+
+// Private resize methods
+func (p *ConnectionPool) shrinkPool(newMax int) error {
+    // Close excess connections
+}
+
+func (p *ConnectionPool) expandPool(newMax int) error {
+    // Prepare capacity for more connections
 }
 ```
 
@@ -818,7 +936,7 @@ The document-context project demonstrates library layer organization:
 ```go
 module github.com/JaimeStill/document-context
 
-go 1.25.2
+go 1.25.4
 
 require (
     github.com/pdfcpu/pdfcpu v0.8.1

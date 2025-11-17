@@ -37,7 +37,50 @@ Please refer to [README](./README.md), [ARCHITECTURE](./ARCHITECTURE.md), and [P
 ### Configuration Transformation Pattern
 **Principle**: Configuration structures are ephemeral data containers that transform into domain objects at package boundaries through finalization, validation, and initialization functions. Configuration is data; domain objects are behavior.
 
-**Rationale**: Separating configuration (data) from domain objects (behavior) creates clean architectural boundaries, enables JSON serialization of settings while maintaining rich runtime behavior, and prevents configuration infrastructure from leaking into business logic. Configuration exists only during initialization; domain objects persist throughout runtime.
+**Rationale**: Separating configuration (data) from domain objects (behavior) creates clean architectural boundaries, enables JSON serialization of settings while maintaining rich runtime behavior, and prevents configuration infrastructure from leaking into business logic. The lifecycle and persistence of configuration depends on its type.
+
+**Configuration Types**:
+
+Configuration serves three distinct purposes, each with different lifecycle and persistence characteristics:
+
+**Type 1: Initialization-Only Configuration**
+- Configuration transforms into domain objects and is discarded after initialization
+- Domain object stores the resolved objects/interfaces, not the configuration
+- Configuration exists only during initialization; domain objects persist throughout runtime
+- Example: Observer name string → resolved observer interface
+
+**Type 2: Immutable Runtime Settings**
+- Configuration represents runtime settings that remain constant after initialization
+- Domain object stores the configuration directly as settings (no field extraction/duplication)
+- Settings persist for the lifetime of the domain object
+- Access via `Settings()` method returning the stored settings
+- Example: ImageConfig stored in ImageMagickRenderer as `settings` field
+
+**Type 3: Mutable Runtime Settings**
+- Configuration represents runtime settings that can be adjusted during execution
+- Domain object stores configuration privately with controlled mutation
+- Setters validate changes and maintain thread safety (mutex protection)
+- Access via getter/setter methods with validation
+- Example: Connection pool max connections, cache size limits
+
+**Decision Framework**:
+
+**Use Type 1 when**:
+- Configuration resolves to objects or interfaces that provide behavior
+- The configuration data itself has no runtime value after initialization
+- Example: String identifiers that resolve to interface implementations
+
+**Use Type 2 when**:
+- Configuration represents immutable settings needed throughout object lifetime
+- Settings must be accessible for operations like cache key generation
+- No runtime mutation is required
+- Example: Image rendering settings (format, DPI, quality)
+
+**Use Type 3 when**:
+- Settings must be adjustable during runtime (resize limits, tune parameters)
+- Changes require validation to maintain invariants
+- Thread safety is required for concurrent access
+- Example: Resource pool limits, performance tuning parameters
 
 **Configuration Responsibilities**:
 - Structure definitions with JSON serialization
@@ -57,22 +100,22 @@ Please refer to [README](./README.md), [ARCHITECTURE](./ARCHITECTURE.md), and [P
 - Encapsulate runtime behavior and business logic
 - Provide interface-based public APIs
 
-**Lifecycle Pattern**:
+**Type 1 Lifecycle Pattern** (Initialization-Only):
 ```go
 // 1. Load configuration (JSON, code, etc.)
-cfg := config.ImageConfig{Format: "png", DPI: 150}
+cfg := config.ObserverConfig{Name: "performance"}
 
 // 2. Transform to domain object (includes Finalize + Validate)
-renderer, err := image.NewImageMagickRenderer(cfg)
+observer, err := observers.NewObserver(cfg)
 if err != nil {
     return fmt.Errorf("invalid configuration: %w", err)
 }
 
-// 3. Use domain object (config is now discarded)
-result, err := renderer.Render(input, output)
+// 3. Use domain object (config discarded, interface stored)
+observer.Notify(event)
 ```
 
-**Transformation Function Pattern**:
+**Type 1 Transformation Function Pattern** (Extract and Discard):
 ```go
 func NewDomainObject(cfg config.DomainConfig) (Interface, error) {
     // Finalize configuration (merge defaults)
@@ -84,10 +127,10 @@ func NewDomainObject(cfg config.DomainConfig) (Interface, error) {
             minValue, maxValue, cfg.Field)
     }
 
-    // Transform to domain object
+    // Transform to domain object (extract values, discard config)
     return &domainObjectImpl{
         field: cfg.Field,
-        // Extract and store validated values
+        // Configuration discarded after extraction
     }, nil
 }
 ```
@@ -101,9 +144,84 @@ func (c *DomainConfig) Finalize() {
 }
 ```
 
+**Type 2 Pattern** (Store Settings Directly):
+```go
+type ImageMagickRenderer struct {
+    settings config.ImageConfig  // Store entire config as settings, no field duplication
+}
+
+func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
+    cfg.Finalize()
+
+    // Validate configuration values
+    if cfg.Quality < 1 || cfg.Quality > 100 {
+        return nil, fmt.Errorf("quality must be 1-100, got %d", cfg.Quality)
+    }
+
+    // Store configuration as immutable runtime settings
+    return &ImageMagickRenderer{
+        settings: cfg,  // Settings persist for object lifetime
+    }, nil
+}
+
+// Access settings throughout lifetime
+func (r *ImageMagickRenderer) Settings() config.ImageConfig {
+    return r.settings
+}
+
+// Use stored settings in operations
+func (r *ImageMagickRenderer) Render(input []byte) ([]byte, error) {
+    // Access r.settings.Format, r.settings.DPI, etc. as needed
+    return r.executeRender(input, r.settings)
+}
+```
+
+**Type 3 Pattern** (Mutable with Thread Safety):
+```go
+type ConnectionPool struct {
+    mutex    sync.RWMutex
+    settings config.PoolConfig  // Private, mutable through validated setters
+}
+
+func NewConnectionPool(cfg config.PoolConfig) (*ConnectionPool, error) {
+    cfg.Finalize()
+
+    if cfg.MaxConnections < 1 {
+        return nil, fmt.Errorf("max connections must be >= 1")
+    }
+
+    return &ConnectionPool{
+        settings: cfg,
+    }, nil
+}
+
+// Read access with read lock
+func (p *ConnectionPool) MaxConnections() int {
+    p.mutex.RLock()
+    defer p.mutex.RUnlock()
+    return p.settings.MaxConnections
+}
+
+// Write access with validation and write lock
+func (p *ConnectionPool) SetMaxConnections(max int) error {
+    if max < 1 {
+        return fmt.Errorf("max connections must be >= 1, got %d", max)
+    }
+
+    p.mutex.Lock()
+    defer p.mutex.Unlock()
+
+    p.settings.MaxConnections = max
+    // Trigger any necessary pool resizing logic
+    return p.resize()
+}
+```
+
 **Benefits**:
 - Clear separation: data (config) vs behavior (domain objects)
-- Configuration is ephemeral and doesn't leak into runtime
+- Type 1: Configuration is ephemeral and doesn't leak into runtime
+- Type 2: Settings persist but are immutable, preventing accidental mutation
+- Type 3: Settings mutation is controlled, validated, and thread-safe
 - Domain objects are always constructed in a valid state
 - Interface-based APIs prevent exposure of implementation details
 - Enables clean testing through interface mocks
@@ -333,7 +451,7 @@ if err != nil {
 }
 ```
 
-### Modern Go Idioms (Go 1.25.2+)
+### Modern Go Idioms (Go 1.25.4+)
 **Principle**: Always engage a subagent to use Context7 MCP to verify code patterns align with the latest Go idioms and standard library best practices when planning code architecture.
 
 **Rationale**: Go evolves with each release, introducing new built-in functions (like `min`/`max` in 1.21), new standard library methods (like `sync.WaitGroup.Go()` in 1.25.0), and refined patterns. Using Context7 ensures implementation guides reflect modern, idiomatic Go code that leverages the latest language features for cleaner, more maintainable implementations.
@@ -346,7 +464,7 @@ if err != nil {
    ```
    Task tool with subagent_type: "general-purpose"
    Prompt: "Review the implementation guide at [path] and verify all code blocks against
-   Go 1.25.2 idioms using Context7 MCP. Retrieve the complete golang/go documentation
+   Go 1.25.4 idioms using Context7 MCP. Retrieve the complete golang/go documentation
    (10,000 tokens) and check for: modern concurrency patterns, proper error handling,
    channel safety, context usage, and new stdlib methods. Return a summary of findings
    with specific line numbers and recommendations."
@@ -359,7 +477,7 @@ if err != nil {
    - context7CompatibleLibraryID: "/golang/go"
    - tokens: 10000
    ```
-   This retrieves the complete Go 1.25.2 standard library documentation covering all packages, patterns, and idioms.
+   This retrieves the complete Go 1.25.4 standard library documentation covering all packages, patterns, and idioms.
 
 3. **Get focused topic documentation** (for specific questions in main conversation):
    ```
@@ -580,6 +698,28 @@ After successful validation, update project documentation:
 5. Create session summary in `_context/sessions/`
 
 **Principle**: Documentation happens AFTER implementation and validation, not during.
+
+### Session Closeout Process
+
+After completing the documentation phase, perform the following session closeout steps:
+
+**Closeout Steps**:
+1. **Create Session Summary**: Document the completed session at `_context/sessions/##-[title].md` with:
+   - What was implemented
+   - Key architectural decisions made
+   - Challenges encountered and solutions
+   - Test coverage achieved
+   - Documentation updates made
+   - Links to relevant commits
+
+2. **Remove Implementation Guide**: Delete the temporary implementation guide at `_context/##-[guide-title].md` since it's replaced by the permanent session summary
+
+3. **Evaluate and Execute Core Document Revisions**: Review and update the following core documents as needed based on the development session:
+   - **ARCHITECTURE.md**: Add new components, interfaces, design patterns, and architectural changes
+   - **PROJECT.md**: Update completed checklist items and current status
+   - **README.md**: Update if user-facing changes exist (prerequisites, installation, usage examples)
+
+**Principle**: Session summaries are permanent documentation; implementation guides are temporary scaffolding removed after completion.
 
 ## Documentation Standards
 

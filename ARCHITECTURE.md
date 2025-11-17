@@ -9,7 +9,15 @@ pkg/
 ├── config/             # Configuration data structures
 │   ├── doc.go          # Package documentation
 │   ├── image.go        # ImageConfig with filter fields
-│   └── cache.go        # CacheConfig structure
+│   ├── cache.go        # CacheConfig structure
+│   └── logger.go       # LoggerConfig structure
+├── logger/             # Structured logging infrastructure
+│   ├── doc.go          # Package documentation
+│   ├── logger.go       # Logger interface
+│   └── slogger.go      # log/slog implementation
+├── cache/              # Persistent image caching infrastructure
+│   ├── doc.go          # Package documentation
+│   └── cache.go        # Cache interface, CacheEntry, key generation
 ├── image/              # Image rendering domain objects
 │   ├── image.go        # Renderer interface
 │   └── imagemagick.go  # ImageMagick implementation
@@ -23,6 +31,8 @@ pkg/
 **Package Dependencies** (higher layers depend on lower layers):
 ```
 pkg/document → pkg/image → pkg/config
+pkg/document → pkg/cache
+pkg/logger → pkg/config
 pkg/encoding (independent utility)
 ```
 
@@ -79,6 +89,182 @@ type CacheConfig struct {
 - `DefaultCacheConfig()`: Returns empty name and initialized options map
 - `Merge(source *CacheConfig)`: Merges name and options using `maps.Copy()`
 
+#### LoggerConfig
+
+Configuration for logger initialization following the Configuration Transformation Pattern (Type 1):
+
+```go
+type LogLevel string
+
+const (
+    LogLevelDebug    LogLevel = "debug"
+    LogLevelInfo     LogLevel = "info"
+    LogLevelWarn     LogLevel = "warn"
+    LogLevelError    LogLevel = "error"
+    LogLevelDisabled LogLevel = "disabled"
+)
+
+type LoggerConfig struct {
+    Level  LogLevel `json:"level,omitempty"`
+    Format string   `json:"format,omitempty"`
+}
+```
+
+**Design**: Ephemeral configuration that transforms into Logger interface via `logger.NewSlogger()` and is discarded after initialization.
+
+**Configuration Methods**:
+- `DefaultLoggerConfig()`: Returns info level with text format
+- `DisabledLoggerConfig()`: Returns disabled level for zero-overhead no-op logging
+- `Finalize()`: Merges configuration with defaults for any unset fields
+
+**Log Levels**:
+- **Debug**: Detailed diagnostic information for development
+- **Info**: General operational events and status messages
+- **Warn**: Unexpected conditions that don't prevent operation
+- **Error**: Failures and exceptional conditions
+- **Disabled**: Suppresses all output with minimal overhead
+
+**Output Formats**:
+- **text**: Human-readable text output
+- **json**: Structured JSON output for log aggregation
+
+### Logger Package (pkg/logger/)
+
+The logger package provides structured logging infrastructure through interface-based abstraction. This package transforms configuration (data) into loggers (behavior) with validation at the transformation boundary.
+
+#### Logger Interface
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+}
+```
+
+**Design**: Interface-based public API hides implementation details and enables dependency injection throughout the application.
+
+**Structured Logging**: All methods accept variadic key-value pairs for structured context:
+```go
+logger.Info("processing document", "path", docPath, "pages", pageCount)
+logger.Error("conversion failed", "error", err, "document", docID)
+```
+
+**Thread Safety**: All Logger implementations must be safe for concurrent use by multiple goroutines.
+
+#### Slogger Implementation
+
+Implementation using Go's standard `log/slog` package:
+
+```go
+func NewSlogger(cfg config.LoggerConfig, output io.Writer) (Logger, error) {
+    cfg.Finalize()  // Apply defaults
+
+    // Validate configuration
+    // - Level must be valid LogLevel constant
+    // - Format must be "text" or "json"
+
+    // Special handling: disabled level uses io.Discard for zero overhead
+
+    return &Slogger{
+        logger: slog.New(handler),
+    }, nil
+}
+```
+
+**Transformation Pattern**: Configuration (data) → Validation → Logger Interface (behavior)
+
+**Validation Boundary**: All validation occurs in `NewSlogger()`. Invalid configurations are rejected before creating the logger.
+
+**Implementation Details**:
+- Struct `Slogger` is unexported (private)
+- Constructor returns `Logger` interface (public API)
+- Wraps `slog.Logger` for structured logging
+- Thread-safe concurrent access via underlying slog implementation
+- Disabled mode automatically replaces output with `io.Discard`
+
+**Benefits**:
+- Consumers cannot access implementation-specific methods
+- Easy to add new logger implementations (e.g., zap, zerolog)
+- Testing through interface mocks
+- Validation centralized at transformation point
+- Zero overhead for disabled logging
+
+### Cache Package (pkg/cache/)
+
+The cache package provides persistent storage infrastructure for rendered document images through interface-based abstraction. This package enables multiple storage backends (filesystem, blob storage, databases, in-memory) to be used interchangeably.
+
+#### Cache Interface
+
+```go
+type Cache interface {
+    Get(key string) (*CacheEntry, error)
+    Set(entry *CacheEntry) error
+    Invalidate(key string) error
+    Clear() error
+}
+```
+
+**Design**: Implementation-agnostic interface supporting multiple storage backends. Consumers depend on the contract, not concrete types.
+
+**Methods**:
+- `Get(key)`: Retrieves cache entry by key, returns `ErrCacheEntryNotFound` for cache misses
+- `Set(entry)`: Stores cache entry, replacing existing entry with same key
+- `Invalidate(key)`: Removes cache entry by key, idempotent (no error if key doesn't exist)
+- `Clear()`: Removes all cache entries
+
+**Thread Safety**: Cache implementations must be safe for concurrent use by multiple goroutines.
+
+**Error Handling**: Distinguishes between cache misses (expected, `ErrCacheEntryNotFound`) and storage failures (unexpected, other errors).
+
+#### CacheEntry
+
+Structure encapsulating cached image data with metadata:
+
+```go
+type CacheEntry struct {
+    Key      string  // SHA256 hash in hexadecimal format (64 characters)
+    Data     []byte  // Raw image bytes (PNG, JPEG, etc.)
+    Filename string  // Suggested filename: "basename.pagenum.ext"
+    MimeType string  // MIME content type: "image/png", "image/jpeg"
+}
+```
+
+**Metadata Purpose**:
+- **Filename**: Meaningful names for HTTP Content-Disposition headers or file storage
+- **MimeType**: Proper Content-Type headers for HTTP responses
+
+#### Cache Key Generation
+
+Deterministic SHA256-based key generation:
+
+```go
+func GenerateKey(input string) string {
+    hash := sha256.Sum256([]byte(input))
+    return hex.EncodeToString(hash[:])
+}
+```
+
+**Input Format**: Normalized string representing all factors uniquely identifying a cached image:
+```
+/absolute/path/to/document.pdf/1.png?dpi=300&quality=90&brightness=10
+```
+
+**Key Properties**:
+- Same input always produces same key (deterministic)
+- Different inputs produce different keys with high probability (cryptographic hash)
+- 64-character hexadecimal string (SHA256)
+
+**Parameter Normalization**: Caller must normalize parameters (e.g., alphabetical ordering) to ensure consistent key generation.
+
+**Sentinel Error**:
+```go
+var ErrCacheEntryNotFound = errors.New("cache entry not found")
+```
+
+Used to distinguish cache misses from storage failures. Callers should use `errors.Is(err, cache.ErrCacheEntryNotFound)` to detect cache misses.
+
 ### Image Rendering Package (pkg/image/)
 
 The image package defines the interface for rendering documents to images and provides implementations. This package transforms configuration (data) into renderers (behavior) with validation at the transformation boundary.
@@ -89,6 +275,7 @@ The image package defines the interface for rendering documents to images and pr
 type Renderer interface {
     Render(inputPath string, pageNum int, outputPath string) error
     FileExtension() string
+    Settings() config.ImageConfig
 }
 ```
 
@@ -97,12 +284,15 @@ type Renderer interface {
 **Methods**:
 - `Render(inputPath, pageNum, outputPath)`: Converts specified page to image file
 - `FileExtension()`: Returns appropriate file extension for output format (no leading dot)
+- `Settings()`: Returns renderer's immutable configuration (Type 2 Configuration Pattern)
 
 **Thread Safety**: Renderer instances are immutable once created and safe for concurrent use.
 
+**Settings Access**: The `Settings()` method exposes the renderer's complete configuration throughout its lifetime. This follows the Type 2 Configuration Pattern (Immutable Runtime Settings), enabling operations like cache key generation that require access to all rendering parameters.
+
 #### ImageMagickRenderer
 
-Implementation using ImageMagick for PDF rendering:
+Implementation using ImageMagick for PDF rendering following the Type 2 Configuration Pattern:
 
 ```go
 func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
@@ -115,26 +305,27 @@ func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
     // - Rotation: 0 to 360 degrees
 
     return &imagemagickRenderer{
-        format:     cfg.Format,
-        quality:    cfg.Quality,
-        dpi:        cfg.DPI,
-        brightness: brightness,
-        contrast:   contrast,
-        saturation: saturation,
-        rotation:   rotation,
+        settings: cfg,  // Store complete configuration
     }, nil
+}
+
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings  // Expose immutable configuration
 }
 ```
 
-**Transformation Pattern**: Configuration (data) → Validation → Domain Object (behavior)
+**Transformation Pattern**: Configuration (data) → Validation → Domain Object (behavior) with Persistent Settings
+
+**Type 2 Configuration Pattern**: Unlike Type 1 (where configuration is discarded), the renderer stores the complete validated configuration in a `settings` field and exposes it via the `Settings()` method. This enables runtime access to all rendering parameters.
 
 **Validation Boundary**: All validation occurs in `NewImageMagickRenderer()`. Invalid configurations are rejected before creating the renderer.
 
 **Implementation Details**:
 - Struct `imagemagickRenderer` is unexported (private)
 - Constructor returns `Renderer` interface (public API)
-- Stores validated values as concrete int fields (no pointers in domain object)
-- `Render()` method builds ImageMagick command with validated parameters
+- Stores complete `ImageConfig` as `settings` field (immutable after creation)
+- `Settings()` method provides access to configuration throughout renderer lifetime
+- `Render()` method builds ImageMagick command using `settings` values
 - Filter application implementation pending (Session 5)
 
 **Benefits**:
@@ -142,6 +333,8 @@ func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
 - Easy to add new renderer implementations (e.g., LibreOffice, Ghostscript)
 - Testing through interface mocks
 - Validation centralized at transformation point
+- Cache key generation can access complete rendering configuration
+- Configuration remains immutable and accessible for introspection
 
 ### Document and Page Interfaces
 
@@ -157,7 +350,7 @@ type Document interface {
 
 type Page interface {
     Number() int
-    ToImage(renderer image.Renderer) ([]byte, error)
+    ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error)
 }
 ```
 
@@ -166,12 +359,14 @@ type Page interface {
 - **Lazy Evaluation**: Pages are extracted on-demand rather than loading entire documents into memory
 - **Resource Management**: Explicit `Close()` method for cleanup of document resources
 - **Composability**: Page operations are independent, enabling parallel processing
+- **Optional Caching**: Cache parameter enables transparent caching without affecting non-cached workflows
 
 **Interface Benefits**:
 - New format support requires only interface implementation
 - Testing through mocks without file I/O
 - Clear contracts between document access and conversion
 - Enables batch processing and pipeline composition
+- Caching opt-in via parameter (pass `nil` to disable)
 
 ### Image Format System
 
@@ -252,16 +447,30 @@ func (d *PDFDocument) ExtractPage(pageNum int) (Page, error) {
 
 **Bounds Checking**: Page numbers validated at extraction time (1-indexed per PDF convention).
 
-### Image Conversion
+### Image Conversion with Optional Caching
 
-The document layer delegates to the image rendering layer through the Renderer interface:
+The document layer delegates to the image rendering layer through the Renderer interface with transparent caching support:
 
 ```go
-func (p *PDFPage) ToImage(renderer image.Renderer) ([]byte, error) {
-    // Get file extension from renderer
-    ext := renderer.FileExtension()
+func (p *PDFPage) ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error) {
+    // Check cache if provided
+    if c != nil {
+        key, err := p.buildCacheKey(renderer.Settings())
+        if err != nil {
+            return nil, err
+        }
 
-    // Create temporary file for output
+        entry, err := c.Get(key)
+        if err == nil {
+            return entry.Data, nil  // Cache hit
+        }
+        if !errors.Is(err, cache.ErrCacheEntryNotFound) {
+            return nil, err  // Real cache error
+        }
+    }
+
+    // Cache miss or no cache - render page
+    ext := renderer.FileExtension()
     tmpFile, err := os.CreateTemp("", fmt.Sprintf("page-%d-*.%s", p.number, ext))
     if err != nil {
         return nil, fmt.Errorf("failed to create temp file: %w", err)
@@ -270,40 +479,150 @@ func (p *PDFPage) ToImage(renderer image.Renderer) ([]byte, error) {
     tmpFile.Close()
     defer os.Remove(tmpPath)
 
-    // Delegate rendering to renderer
     err = renderer.Render(p.doc.path, p.number, tmpPath)
     if err != nil {
         return nil, fmt.Errorf("failed to render page %d: %w", p.number, err)
     }
 
-    // Read generated image
     imgData, err := os.ReadFile(tmpPath)
     if err != nil {
-        return nil, fmt.Errorf("failed to read generated image: %w", err)
+        return nil, fmt.Errorf("failed to read rendered image: %w", err)
+    }
+
+    // Store in cache if provided
+    if c != nil {
+        entry, err := p.prepareCache(imgData, renderer.Settings())
+        if err != nil {
+            return nil, err
+        }
+        if err := c.Set(entry); err != nil {
+            return nil, err
+        }
     }
 
     return imgData, nil
 }
 ```
 
-**Design Pattern**: Clean delegation with clear separation of concerns.
+**Cache-Aware Rendering Pattern**: Transparent caching layer that checks cache before rendering and stores results after rendering. Caching is completely optional via the cache parameter.
+
+**Caching Behavior**:
+- **Cache provided + cache hit**: Returns cached image immediately (no rendering)
+- **Cache provided + cache miss**: Renders page, stores in cache, returns image
+- **No cache (nil)**: Always renders page (original behavior, no caching overhead)
+- **Cache errors**: Non-`ErrCacheEntryNotFound` errors are propagated as failures
+
+**Design Pattern**: Clean delegation with optional optimization through caching.
 
 **Responsibilities**:
-- **Document Layer (PDFPage)**: Temporary file management, error context
+- **Document Layer (PDFPage)**: Cache checking, temporary file management, cache storage, error context
+- **Cache Layer**: Persistent storage of rendered images with metadata
 - **Image Layer (Renderer)**: Format validation, ImageMagick integration, rendering logic
 
 **Benefits**:
-1. **No ImageMagick Knowledge**: Document layer doesn't know about ImageMagick, densities, formats, or quality settings
-2. **No Validation**: Renderer is already validated at creation time (by `NewImageMagickRenderer()`)
-3. **Simple Logic**: Create temp file → delegate to renderer → read result
+1. **Optional Performance Optimization**: Caching available when needed without affecting non-cached workflows
+2. **No ImageMagick Knowledge**: Document layer doesn't know about ImageMagick internals
+3. **Transparent Caching**: Callers don't need to manage cache checking/storing logic
 4. **Clear Errors**: Contextual error messages with page numbers
-5. **Interface-Based**: Can swap renderer implementations without changing document code
+5. **Interface-Based**: Can swap renderer and cache implementations independently
+6. **Backward Compatible**: Pass `nil` for cache parameter to disable caching
 
 **Temporary File Management**:
 - File extension obtained from renderer (encapsulates format knowledge)
 - Unique naming prevents conflicts in concurrent operations
 - `defer os.Remove()` ensures cleanup even on errors
 - File handle closed before renderer writes to it
+
+#### Cache Key Generation
+
+Deterministic cache key generation from page and rendering settings:
+
+```go
+func (p *PDFPage) buildCacheKey(settings config.ImageConfig) (string, error) {
+    absPath, err := filepath.Abs(p.doc.path)
+    if err != nil {
+        return "", fmt.Errorf("failed to normalize path: %w", err)
+    }
+
+    var builder strings.Builder
+    builder.WriteString(fmt.Sprintf("%s/%d.%s", absPath, p.number, settings.Format))
+
+    params := make([]string, 0)
+    params = append(params, fmt.Sprintf("dpi=%d", settings.DPI))
+    params = append(params, fmt.Sprintf("quality=%d", settings.Quality))
+
+    // Add optional filter parameters if present
+    if settings.Brightness != nil {
+        params = append(params, fmt.Sprintf("brightness=%d", *settings.Brightness))
+    }
+    if settings.Contrast != nil {
+        params = append(params, fmt.Sprintf("contrast=%d", *settings.Contrast))
+    }
+    if settings.Rotation != nil {
+        params = append(params, fmt.Sprintf("rotation=%d", *settings.Rotation))
+    }
+    if settings.Saturation != nil {
+        params = append(params, fmt.Sprintf("saturation=%d", *settings.Saturation))
+    }
+
+    builder.WriteString(fmt.Sprintf("?%s", strings.Join(params, "&")))
+
+    key := cache.GenerateKey(builder.String())
+    return key, nil
+}
+```
+
+**Cache Key Format** (before hashing):
+```
+/absolute/path/to/document.pdf/1.png?dpi=300&quality=90&brightness=10
+```
+
+**Key Components**:
+- Document path (normalized to absolute path)
+- Page number
+- Image format
+- All rendering parameters in deterministic alphabetical order
+
+**Deterministic Ordering**: Parameters included alphabetically (brightness, contrast, rotation, saturation) to ensure the same inputs always produce the same key.
+
+**Why Type 2 Pattern Enables This**: The `Settings()` method provides access to the complete rendering configuration needed for cache key generation. Without persistent settings access, cache key generation would be impossible.
+
+#### Cache Entry Preparation
+
+Constructs complete cache entry with metadata:
+
+```go
+func (p *PDFPage) prepareCache(data []byte, settings config.ImageConfig) (*cache.CacheEntry, error) {
+    key, err := p.buildCacheKey(settings)
+    if err != nil {
+        return nil, err
+    }
+
+    baseName := filepath.Base(p.doc.path)
+    ext := filepath.Ext(baseName)
+    nameWithoutExt := strings.TrimSuffix(baseName, ext)
+
+    filename := fmt.Sprintf("%s.%d.%s", nameWithoutExt, p.number, settings.Format)
+
+    mimeType := mime.TypeByExtension("." + settings.Format)
+    if mimeType == "" {
+        mimeType = "application/octet-stream"
+    }
+
+    return &cache.CacheEntry{
+        Key:      key,
+        Data:     data,
+        Filename: filename,
+        MimeType: mimeType,
+    }, nil
+}
+```
+
+**Filename Construction**: Formatted as `basename.pagenum.ext` (e.g., "document.1.png")
+
+**MIME Type Derivation**: Uses standard library `mime.TypeByExtension()` with fallback to `application/octet-stream`
+
+**Complete Entry**: Provides all metadata needed for HTTP serving or file storage
 
 ## Image Encoding
 
@@ -352,6 +671,14 @@ Tests are separated from implementation in a parallel `tests/` directory:
 
 ```
 tests/
+├── config/
+│   └── logger_test.go
+├── logger/
+│   └── slogger_test.go
+├── cache/
+│   └── cache_test.go
+├── image/
+│   └── imagemagick_test.go
 ├── document/
 │   └── pdf_test.go
 └── encoding/
@@ -392,18 +719,27 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 ### Test Coverage
 
 **Current Focus**:
-- PDF document loading and validation
-- Page extraction and bounds checking
-- Image format validation
-- Data URI encoding correctness
-- Error handling for missing binaries
-- Format-specific behavior (PNG vs JPEG)
+- **Logger Configuration**: Default values, finalization, merging behavior
+- **Logger Implementation**: Output formats, log levels, argument handling, disabled mode
+- **Cache Infrastructure**: Key generation (deterministic, format, ordering), entry structure
+- **Image Rendering**: Renderer configuration, Settings() access, ImageMagick integration
+- **PDF Processing**: Document loading, page extraction, bounds checking, cache-aware rendering
+- **Image Encoding**: Data URI encoding, format validation
+- **Error Handling**: Missing binaries, invalid configurations, cache misses vs errors
 
 **Test Patterns**:
 - Table-driven tests for multiple scenarios
+- Black-box testing using `package <name>_test`
+- Interface compliance verification
 - Magic byte validation for image format verification
-- Error case testing (missing files, invalid pages, out of range)
-- Default value behavior testing
+- Error case testing (missing files, invalid pages, out of range, invalid configs)
+- Default value and finalization behavior testing
+- Conditional execution for external binary dependencies
+
+**Test Statistics** (Session 2):
+- Total new test code: 413 lines
+- Total test functions: 23+ (including subtests)
+- Coverage: Configuration, logging, caching, rendering, document processing
 
 ## Extension Points
 
@@ -519,7 +855,13 @@ Document and Page interfaces decouple format-specific implementations from proce
 
 ### Configuration Transformation Pattern
 
-Configuration structures are ephemeral data containers that transform into domain objects at package boundaries through finalization, validation, and initialization functions. This pattern creates a clear separation between data (configuration) and behavior (domain objects).
+Configuration structures are data containers that transform into domain objects at package boundaries through finalization, validation, and initialization functions. This pattern creates a clear separation between data (configuration) and behavior (domain objects).
+
+The library uses three distinct configuration pattern types based on how configuration persists after transformation:
+
+#### Type 1: Configuration Transformation (Initialization-Only)
+
+Configuration exists only during initialization and is discarded after transformation into domain objects.
 
 **Lifecycle**:
 ```
@@ -532,23 +874,101 @@ Configuration structures are ephemeral data containers that transform into domai
 4. Use Domain Object (configuration discarded)
 ```
 
-**Example**:
+**Example** (Logger):
 ```go
 // 1. Create configuration
-cfg := config.ImageConfig{
-    Format: "png",
-    DPI:    150,
+cfg := config.LoggerConfig{
+    Level:  config.LogLevelInfo,
+    Format: "json",
 }
 
 // 2. Transform to domain object (Finalize + Validate)
-renderer, err := image.NewImageMagickRenderer(cfg)
+logger, err := logger.NewSlogger(cfg, os.Stderr)
 if err != nil {
     return fmt.Errorf("invalid configuration: %w", err)
 }
 
 // 3. Use domain object (config is now discarded)
-imageData, err := page.ToImage(renderer)
+logger.Info("application started")
 ```
+
+**Characteristics**:
+- Configuration ephemeral, discarded after transformation
+- Domain object stores only extracted primitive values
+- No method to retrieve original configuration
+- Examples: Logger (configuration → Logger interface)
+
+#### Type 2: Immutable Runtime Settings
+
+Configuration is stored directly in the domain object and accessible throughout its lifetime via `Settings()` method. Configuration remains immutable after creation.
+
+**Lifecycle**:
+```
+1. Create/Load Configuration (JSON, code, defaults)
+    ↓
+2. Finalize Configuration (merge defaults)
+    ↓
+3. Transform to Domain Object via New*() (validate, store config)
+    ↓
+4. Use Domain Object (settings accessible via Settings() method)
+```
+
+**Example** (Image Renderer):
+```go
+// 1. Create configuration
+cfg := config.ImageConfig{
+    Format:  "png",
+    DPI:     300,
+    Quality: 90,
+}
+
+// 2. Transform to domain object (stores complete config)
+renderer, err := image.NewImageMagickRenderer(cfg)
+if err != nil {
+    return fmt.Errorf("invalid configuration: %w", err)
+}
+
+// 3. Use domain object (settings remain accessible)
+imageData, err := page.ToImage(renderer, cache)
+
+// 4. Access settings when needed (e.g., cache key generation)
+settings := renderer.Settings()
+key := buildCacheKey(settings)
+```
+
+**Implementation Pattern**:
+```go
+type imagemagickRenderer struct {
+    settings config.ImageConfig  // Store entire config
+}
+
+func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
+    cfg.Finalize()
+    // validate...
+    return &imagemagickRenderer{
+        settings: cfg,  // Store complete configuration
+    }, nil
+}
+
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings  // Expose immutable settings
+}
+```
+
+**Characteristics**:
+- Configuration stored as `settings` field in domain object
+- Accessible via `Settings()` method in interface
+- Configuration immutable after creation
+- Enables runtime introspection (e.g., cache key generation)
+- Examples: Renderer (ImageConfig accessible throughout lifetime)
+
+**Why This Matters**: Cache key generation requires access to complete rendering parameters (DPI, quality, filters). Without the `Settings()` method, this would be impossible.
+
+#### Type 3: Mutable Runtime Settings (Future)
+
+Configuration can be modified after creation via setter methods. Enables runtime adjustment of operational parameters.
+
+**Not yet implemented** - placeholder for future enhancement (e.g., adjustable log levels, dynamic rendering parameters).
 
 **Configuration Responsibilities**:
 - Structure definitions with JSON serialization

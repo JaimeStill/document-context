@@ -7,6 +7,8 @@
 // accept configuration and return interface types, hiding implementation details.
 package image
 
+import "github.com/JaimeStill/document-context/pkg/config"
+
 // Renderer defines the interface for rendering document pages to image files.
 //
 // Implementations handle the conversion of document pages to various image formats
@@ -31,4 +33,18 @@ type Renderer interface {
 	//
 	// The extension does not include a leading dot (e.g., "png" not ".png").
 	FileExtension() string
+
+	// Settings returns the renderer's immutable configuration.
+	//
+	// This method exposes the ImageConfig used to create the renderer, enabling
+	// access to rendering parameters throughout the renderer's lifetime. This
+	// follows the Type 2 Configuration Pattern (Immutable Runtime Settings).
+	//
+	// The returned configuration is used for operations like cache key generation
+	// where the complete rendering parameters must be available to ensure cache
+	// correctness.
+	//
+	// The configuration is immutable after renderer creation - it cannot be
+	// changed through this interface.
+	Settings() config.ImageConfig
 }

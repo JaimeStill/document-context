@@ -283,6 +283,53 @@ func TestRenderer_Interface(t *testing.T) {
 	}
 }
 
+func TestRenderer_Settings(t *testing.T) {
+	cfg := config.ImageConfig{
+		Format:     "png",
+		DPI:        300,
+		Quality:    90,
+		Brightness: intPtr(10),
+		Contrast:   intPtr(-5),
+		Saturation: intPtr(15),
+		Rotation:   intPtr(90),
+	}
+
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	settings := renderer.Settings()
+
+	if settings.Format != cfg.Format {
+		t.Errorf("expected format %q, got %q", cfg.Format, settings.Format)
+	}
+
+	if settings.DPI != cfg.DPI {
+		t.Errorf("expected DPI %d, got %d", cfg.DPI, settings.DPI)
+	}
+
+	if settings.Quality != cfg.Quality {
+		t.Errorf("expected quality %d, got %d", cfg.Quality, settings.Quality)
+	}
+
+	if settings.Brightness == nil || *settings.Brightness != *cfg.Brightness {
+		t.Errorf("expected brightness %d, got %v", *cfg.Brightness, settings.Brightness)
+	}
+
+	if settings.Contrast == nil || *settings.Contrast != *cfg.Contrast {
+		t.Errorf("expected contrast %d, got %v", *cfg.Contrast, settings.Contrast)
+	}
+
+	if settings.Saturation == nil || *settings.Saturation != *cfg.Saturation {
+		t.Errorf("expected saturation %d, got %v", *cfg.Saturation, settings.Saturation)
+	}
+
+	if settings.Rotation == nil || *settings.Rotation != *cfg.Rotation {
+		t.Errorf("expected rotation %d, got %v", *cfg.Rotation, settings.Rotation)
+	}
+}
+
 func TestRenderer_BoundaryValues(t *testing.T) {
 	tests := []struct {
 		name   string

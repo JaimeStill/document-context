@@ -9,13 +9,7 @@ import (
 )
 
 type imagemagickRenderer struct {
-	format     string
-	quality    int
-	dpi        int
-	brightness int
-	contrast   int
-	saturation int
-	rotation   int
+	settings config.ImageConfig
 }
 
 // NewImageMagickRenderer creates a new Renderer using ImageMagick for rendering.
@@ -47,46 +41,32 @@ func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
 		}
 	}
 
-	brightness := 0
 	if cfg.Brightness != nil {
 		if *cfg.Brightness < -100 || *cfg.Brightness > 100 {
 			return nil, fmt.Errorf("brightness must be -100 to +100, got %d", *cfg.Brightness)
 		}
-		brightness = *cfg.Brightness
 	}
 
-	contrast := 0
 	if cfg.Contrast != nil {
 		if *cfg.Contrast < -100 || *cfg.Contrast > 100 {
 			return nil, fmt.Errorf("contrast must be -100 to +100, got %d", *cfg.Contrast)
 		}
-		contrast = *cfg.Contrast
 	}
 
-	saturation := 0
 	if cfg.Saturation != nil {
 		if *cfg.Saturation < -100 || *cfg.Saturation > 100 {
 			return nil, fmt.Errorf("saturation must be -100 to +100, got %d", *cfg.Saturation)
 		}
-		saturation = *cfg.Saturation
 	}
 
-	rotation := 0
 	if cfg.Rotation != nil {
 		if *cfg.Rotation < 0 || *cfg.Rotation > 360 {
 			return nil, fmt.Errorf("rotation must be 0 to 360 degrees, got %d", *cfg.Rotation)
 		}
-		rotation = *cfg.Rotation
 	}
 
 	return &imagemagickRenderer{
-		format:     cfg.Format,
-		quality:    cfg.Quality,
-		dpi:        cfg.DPI,
-		brightness: brightness,
-		contrast:   contrast,
-		saturation: saturation,
-		rotation:   rotation,
+		settings: cfg,
 	}, nil
 }
 
@@ -95,14 +75,14 @@ func (r *imagemagickRenderer) Render(inputPath string, pageNum int, outputPath s
 	inputSpec := fmt.Sprintf("%s[%d]", inputPath, pageIndex)
 
 	args := []string{
-		"-density", strconv.Itoa(r.dpi),
+		"-density", strconv.Itoa(r.settings.DPI),
 		inputSpec,
 		"-background", "white",
 		"-flatten",
 	}
 
-	if r.format == "jpg" {
-		args = append(args, "-quality", strconv.Itoa(r.quality))
+	if r.settings.Format == "jpg" {
+		args = append(args, "-quality", strconv.Itoa(r.settings.Quality))
 	}
 
 	args = append(args, outputPath)
@@ -117,5 +97,9 @@ func (r *imagemagickRenderer) Render(inputPath string, pageNum int, outputPath s
 }
 
 func (r *imagemagickRenderer) FileExtension() string {
-	return r.format
+	return r.settings.Format
+}
+
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+	return r.settings
 }
