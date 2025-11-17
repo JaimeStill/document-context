@@ -17,7 +17,9 @@ pkg/
 │   └── slogger.go      # log/slog implementation
 ├── cache/              # Persistent image caching infrastructure
 │   ├── doc.go          # Package documentation
-│   └── cache.go        # Cache interface, CacheEntry, key generation
+│   ├── cache.go        # Cache interface, CacheEntry, key generation
+│   ├── registry.go     # Factory registration and cache creation
+│   └── filesystem.go   # Filesystem-based cache implementation
 ├── image/              # Image rendering domain objects
 │   ├── image.go        # Renderer interface
 │   └── imagemagick.go  # ImageMagick implementation
@@ -78,16 +80,19 @@ Configuration for cache implementations:
 
 ```go
 type CacheConfig struct {
-    Name    string         `json:"name"`             // Implementation identifier
+    Name    string         `json:"name"`              // Implementation identifier
+    Logger  LoggerConfig   `json:"logger"`            // Logger configuration
     Options map[string]any `json:"options,omitempty"` // Implementation-specific settings
 }
 ```
 
-**Design**: Name-based approach where Name identifies cache type and Options provides implementation-specific parameters.
+**Design**: Name-based approach where Name identifies cache type, Logger provides common logging configuration, and Options provides implementation-specific parameters.
 
 **Configuration Methods**:
-- `DefaultCacheConfig()`: Returns empty name and initialized options map
-- `Merge(source *CacheConfig)`: Merges name and options using `maps.Copy()`
+- `DefaultCacheConfig()`: Returns empty name, default logger config, and initialized options map
+- `Merge(source *CacheConfig)`: Merges name, delegates to Logger.Merge(), and merges options using `maps.Copy()`
+
+**Common Dependencies**: Logger is a common dependency for all cache implementations, so it's included in the base CacheConfig rather than being implementation-specific in Options.
 
 #### LoggerConfig
 
@@ -104,9 +109,18 @@ const (
     LogLevelDisabled LogLevel = "disabled"
 )
 
+type LoggerOutput string
+
+const (
+    LoggerOutputDiscard LoggerOutput = "discard"
+    LoggerOutputStdout  LoggerOutput = "stdout"
+    LoggerOutputStderr  LoggerOutput = "stderr"
+)
+
 type LoggerConfig struct {
-    Level  LogLevel `json:"level,omitempty"`
-    Format string   `json:"format,omitempty"`
+    Level  LogLevel      `json:"level,omitempty"`
+    Format string        `json:"format,omitempty"`
+    Output LoggerOutput  `json:"output"`
 }
 ```
 
@@ -116,6 +130,7 @@ type LoggerConfig struct {
 - `DefaultLoggerConfig()`: Returns info level with text format
 - `DisabledLoggerConfig()`: Returns disabled level for zero-overhead no-op logging
 - `Finalize()`: Merges configuration with defaults for any unset fields
+- `Merge(source *LoggerConfig)`: Overlays non-empty values from source for layered configuration
 
 **Log Levels**:
 - **Debug**: Detailed diagnostic information for development
@@ -123,6 +138,11 @@ type LoggerConfig struct {
 - **Warn**: Unexpected conditions that don't prevent operation
 - **Error**: Failures and exceptional conditions
 - **Disabled**: Suppresses all output with minimal overhead
+
+**Log Output Destinations**:
+- **discard**: Discards all output (io.Discard)
+- **stdout**: Writes to standard output (os.Stdout)
+- **stderr**: Writes to standard error (os.Stderr)
 
 **Output Formats**:
 - **text**: Human-readable text output
@@ -158,14 +178,24 @@ logger.Error("conversion failed", "error", err, "document", docID)
 Implementation using Go's standard `log/slog` package:
 
 ```go
-func NewSlogger(cfg config.LoggerConfig, output io.Writer) (Logger, error) {
+func NewSlogger(cfg config.LoggerConfig) (Logger, error) {
     cfg.Finalize()  // Apply defaults
 
     // Validate configuration
     // - Level must be valid LogLevel constant
     // - Format must be "text" or "json"
+    // - Output must be valid LoggerOutput constant
 
-    // Special handling: disabled level uses io.Discard for zero overhead
+    // Derive output writer from LoggerOutput
+    var output io.Writer
+    switch cfg.Output {
+    case LoggerOutputDiscard, "":
+        output = io.Discard
+    case LoggerOutputStdout:
+        output = os.Stdout
+    case LoggerOutputStderr:
+        output = os.Stderr
+    }
 
     return &Slogger{
         logger: slog.New(handler),
@@ -177,12 +207,15 @@ func NewSlogger(cfg config.LoggerConfig, output io.Writer) (Logger, error) {
 
 **Validation Boundary**: All validation occurs in `NewSlogger()`. Invalid configurations are rejected before creating the logger.
 
+**Output Derivation**: Output writer is determined by LoggerOutput enum in configuration rather than passed as parameter, making logger creation fully configuration-driven.
+
 **Implementation Details**:
 - Struct `Slogger` is unexported (private)
 - Constructor returns `Logger` interface (public API)
 - Wraps `slog.Logger` for structured logging
 - Thread-safe concurrent access via underlying slog implementation
-- Disabled mode automatically replaces output with `io.Discard`
+- Disabled mode automatically uses `io.Discard` for zero overhead
+- Output destination controlled by configuration
 
 **Benefits**:
 - Consumers cannot access implementation-specific methods
@@ -190,6 +223,7 @@ func NewSlogger(cfg config.LoggerConfig, output io.Writer) (Logger, error) {
 - Testing through interface mocks
 - Validation centralized at transformation point
 - Zero overhead for disabled logging
+- Fully configuration-driven (no runtime parameters)
 
 ### Cache Package (pkg/cache/)
 
@@ -227,13 +261,11 @@ type CacheEntry struct {
     Key      string  // SHA256 hash in hexadecimal format (64 characters)
     Data     []byte  // Raw image bytes (PNG, JPEG, etc.)
     Filename string  // Suggested filename: "basename.pagenum.ext"
-    MimeType string  // MIME content type: "image/png", "image/jpeg"
 }
 ```
 
 **Metadata Purpose**:
-- **Filename**: Meaningful names for HTTP Content-Disposition headers or file storage
-- **MimeType**: Proper Content-Type headers for HTTP responses
+- **Filename**: Meaningful names for HTTP Content-Disposition headers or file storage. File extension can be used to derive MIME type when needed (web service concern, not library concern)
 
 #### Cache Key Generation
 
@@ -264,6 +296,172 @@ var ErrCacheEntryNotFound = errors.New("cache entry not found")
 ```
 
 Used to distinguish cache misses from storage failures. Callers should use `errors.Is(err, cache.ErrCacheEntryNotFound)` to detect cache misses.
+
+#### Cache Registry Pattern
+
+The cache package uses a registry pattern to support multiple cache implementations that can be selected via configuration.
+
+**Factory Type**:
+```go
+type Factory func(c *config.CacheConfig) (Cache, error)
+```
+
+Cache implementations register factory functions that create configured Cache instances from CacheConfig.
+
+**Registry Functions**:
+```go
+func Register(name string, factory Factory)
+func Create(c *config.CacheConfig) (Cache, error)
+func ListCaches() []string
+```
+
+**Registration Pattern**:
+```go
+func init() {
+    cache.Register("filesystem", NewFilesystem)
+}
+```
+
+Cache implementations register themselves in init() functions, making them available for creation via configuration.
+
+**Creation Pattern**:
+```go
+cfg := &config.CacheConfig{
+    Name: "filesystem",
+    Options: map[string]any{"directory": "/var/cache"},
+}
+cache, err := cache.Create(cfg)
+```
+
+**Registry Behavior**:
+- Thread-safe using sync.RWMutex
+- Silent overwriting: registering the same name multiple times replaces previous factory
+- Panics on invalid registration: empty name or nil factory
+- Returns error for unknown cache types
+
+**Benefits**:
+- Pluggable cache backends without modifying core code
+- Configuration-driven cache selection
+- Discoverable implementations via `ListCaches()`
+- Centralized creation logic with validation
+
+#### Configuration Composition Pattern
+
+Cache implementations use the Configuration Composition Pattern to handle implementation-specific configuration:
+
+**Pattern Flow**:
+```
+BaseConfig (CacheConfig)
+    ↓ Options map[string]any
+    ↓ Parse Function
+TypedImplConfig (FilesystemCacheConfig)
+    ↓ Validation
+Domain Object (FilesystemCache)
+```
+
+**Example** (FilesystemCache):
+```go
+// Type-specific configuration
+type FilesystemCacheConfig struct {
+    Directory string
+}
+
+// Parse from generic Options map
+func parseFilesystemConfig(options map[string]any) (*FilesystemCacheConfig, error) {
+    dir, ok := options["directory"]
+    if !ok {
+        return nil, fmt.Errorf("directory option is required")
+    }
+    directory, ok := dir.(string)
+    if !ok {
+        return nil, fmt.Errorf("directory option must be a string")
+    }
+    if directory == "" {
+        return nil, fmt.Errorf("directory option cannot be empty")
+    }
+    return &FilesystemCacheConfig{Directory: directory}, nil
+}
+
+// Factory transforms config into domain object
+func NewFilesystem(c *config.CacheConfig) (Cache, error) {
+    fsConfig, err := parseFilesystemConfig(c.Options)
+    if err != nil {
+        return nil, err
+    }
+    // Create cache with validated typed config
+    return &FilesystemCache{directory: fsConfig.Directory}, nil
+}
+```
+
+**Pattern Benefits**:
+- Type-safe implementation configuration
+- Centralized validation in parse functions
+- Extensible without modifying base CacheConfig
+- Clear transformation from data to behavior
+
+#### FilesystemCache Implementation
+
+Filesystem-based cache using directory-per-key storage structure:
+
+**Storage Structure**:
+```
+<cache_root>/
+    <key>/
+        <filename>
+```
+
+Example:
+```
+/var/cache/
+    a3b5c7.../
+        document.1.png
+    d4e6f8.../
+        report.2.jpg
+```
+
+**Configuration** (via Options map):
+```go
+cfg := &config.CacheConfig{
+    Name: "filesystem",
+    Logger: config.LoggerConfig{Level: config.LogLevelInfo},
+    Options: map[string]any{
+        "directory": "/var/cache",  // Required: cache root directory
+    },
+}
+```
+
+**Initialization**:
+- Normalizes directory path to absolute path
+- Creates cache root directory if it doesn't exist (0755 permissions)
+- Creates logger from embedded LoggerConfig
+- Validates directory option is non-empty string
+
+**Cache Operations**:
+
+- **Get(key)**: Reads key directory, validates exactly 1 file exists (detects corruption), returns CacheEntry
+- **Set(entry)**: Creates key directory (0755), writes data to file with entry's filename (0644)
+- **Invalidate(key)**: Removes entire key directory, idempotent (no error if key doesn't exist)
+- **Clear()**: Iterates through cache root, removes all subdirectories, logs warnings for failures
+
+**Error Handling**:
+- **Cache miss**: Returns `ErrCacheEntryNotFound` only when key directory doesn't exist
+- **Corruption detection**: Multiple files or directory instead of file returns descriptive error
+- **Filesystem errors**: Permission denied, disk full, etc. return wrapped errors
+
+**Thread Safety**: Safe for concurrent operations on different keys via OS filesystem atomicity. Operations on the same key are not atomic across multiple goroutines.
+
+**Logging**: Uses structured logging for debugging:
+```go
+logger.Debug("cache.get", "key", key, "found", true)
+logger.Debug("cache.set", "key", key, "size", len(data))
+logger.Info("cache.clear", "file_count", removedCount)
+```
+
+**Benefits**:
+- Simple, portable storage (no external dependencies)
+- Easy inspection and debugging (files visible on filesystem)
+- Corruption detection through validation
+- Graceful degradation (Clear() continues on individual failures)
 
 ### Image Rendering Package (pkg/image/)
 
@@ -672,17 +870,20 @@ Tests are separated from implementation in a parallel `tests/` directory:
 ```
 tests/
 ├── config/
-│   └── logger_test.go
+│   ├── cache_test.go         # CacheConfig and LoggerConfig tests
+│   └── logger_test.go        # LoggerConfig tests
 ├── logger/
-│   └── slogger_test.go
+│   └── slogger_test.go       # Slogger implementation tests
 ├── cache/
-│   └── cache_test.go
+│   ├── cache_test.go         # CacheEntry and key generation tests
+│   ├── registry_test.go      # Registry pattern tests (Session 3)
+│   └── filesystem_test.go    # FilesystemCache implementation tests (Session 4)
 ├── image/
-│   └── imagemagick_test.go
+│   └── imagemagick_test.go   # ImageMagick renderer tests
 ├── document/
-│   └── pdf_test.go
+│   └── pdf_test.go           # PDF document and page tests
 └── encoding/
-    └── image_test.go
+    └── image_test.go         # Data URI encoding tests
 ```
 
 **Black-Box Testing**: All tests use `package <name>_test` to test only the public API.
@@ -719,13 +920,16 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 ### Test Coverage
 
 **Current Focus**:
-- **Logger Configuration**: Default values, finalization, merging behavior
+- **Logger Configuration**: Default values, finalization, merging behavior, output destinations
 - **Logger Implementation**: Output formats, log levels, argument handling, disabled mode
+- **Cache Registry**: Registration, factory creation, listing, thread safety, concurrent access
+- **Cache Implementation**: Filesystem CRUD operations, corruption detection, directory-per-key structure
 - **Cache Infrastructure**: Key generation (deterministic, format, ordering), entry structure
+- **Cache Configuration**: Options parsing, validation, Configuration Composition Pattern
 - **Image Rendering**: Renderer configuration, Settings() access, ImageMagick integration
 - **PDF Processing**: Document loading, page extraction, bounds checking, cache-aware rendering
 - **Image Encoding**: Data URI encoding, format validation
-- **Error Handling**: Missing binaries, invalid configurations, cache misses vs errors
+- **Error Handling**: Missing binaries, invalid configurations, cache misses vs errors, cache corruption
 
 **Test Patterns**:
 - Table-driven tests for multiple scenarios
@@ -735,11 +939,15 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 - Error case testing (missing files, invalid pages, out of range, invalid configs)
 - Default value and finalization behavior testing
 - Conditional execution for external binary dependencies
+- Concurrency testing using sync.WaitGroup and error channels
+- Temporary directory isolation using t.TempDir()
 
-**Test Statistics** (Session 2):
-- Total new test code: 413 lines
-- Total test functions: 23+ (including subtests)
-- Coverage: Configuration, logging, caching, rendering, document processing
+**Test Statistics** (Session 4):
+- **Cache Package Coverage**: 87.1%
+- **Config Package Coverage**: 95.3%
+- **Registry Tests**: 10 test functions covering registration, creation, listing, concurrency
+- **Filesystem Tests**: 13 test functions covering factory, CRUD, corruption, concurrency
+- **Config Tests**: Updated for Logger.Merge, CacheConfig.Merge, LoggerOutput constants
 
 ## Extension Points
 

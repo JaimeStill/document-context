@@ -3,7 +3,6 @@ package document
 import (
 	"errors"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -215,17 +214,11 @@ func (p *PDFPage) buildCacheKey(settings config.ImageConfig) (string, error) {
 //   - Key: Generated from document path, page number, and rendering settings
 //   - Data: The rendered image bytes
 //   - Filename: Suggested filename in format "basename.pagenum.ext"
-//   - MimeType: MIME content type derived from image format
 //
 // Filename construction:
 //   - Extracts base filename from document path (without extension)
 //   - Appends page number and output format extension
 //   - Example: "document.pdf" page 1 as PNG → "document.1.png"
-//
-// MIME type derivation:
-//   - Uses mime.TypeByExtension() from standard library
-//   - Falls back to "application/octet-stream" for unknown formats
-//   - Example: ".png" → "image/png", ".jpg" → "image/jpeg"
 //
 // Returns a complete cache entry ready for storage, or an error if the cache
 // key cannot be generated.
@@ -241,15 +234,9 @@ func (p *PDFPage) prepareCache(data []byte, settings config.ImageConfig) (*cache
 
 	filename := fmt.Sprintf("%s.%d.%s", nameWithoutExt, p.number, settings.Format)
 
-	mimeType := mime.TypeByExtension("." + settings.Format)
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
 	return &cache.CacheEntry{
 		Key:      key,
 		Data:     data,
 		Filename: filename,
-		MimeType: mimeType,
 	}, nil
 }

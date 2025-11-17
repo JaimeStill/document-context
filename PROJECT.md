@@ -267,118 +267,99 @@ Phase 2 is broken down into eight focused development sessions, organized from l
 
 ---
 
-#### Session 3: Cache Registry Infrastructure
+#### Session 3: Cache Registry Infrastructure ✅
 
 **Goal**: Implement registry system for pluggable cache implementations
 
-**Tasks**:
-1. Create `pkg/cache/registry.go` with registry structure:
-   ```go
-   type Factory func(c *config.CacheConfig) (Cache, error)
-
-   type registry struct {
-       factories map[string]Factory
-       mu        sync.RWMutex
-   }
-
-   var register = &registry{
-       factories: make(map[string]Factory),
-   }
-   ```
-2. Implement `Register(name string, factory Factory)`:
-   - Thread-safe write lock
-   - Store factory in map
-3. Implement `Create(c *config.CacheConfig) (Cache, error)`:
-   - Thread-safe read lock
-   - Lookup factory by name
-   - Return error if not found: `"unknown cache type: %s"`
-   - Call factory function with config
-4. Implement `ListCaches() []string`:
-   - Thread-safe read lock
-   - Return sorted list of registered names
-5. Create `tests/cache/registry_test.go`:
-   - Test registration of mock cache factory
-   - Test `Create()` with valid cache name
-   - Test `Create()` with invalid cache name (error case)
-   - Test `ListCaches()` returns all registered names
-   - Test thread safety with concurrent registration and lookup
+**Completed Tasks**:
+1. ✅ Created `pkg/cache/registry.go` with Factory type and registry structure
+2. ✅ Implemented `Register(name string, factory Factory)` with panic on invalid inputs
+3. ✅ Implemented `Create(c *config.CacheConfig) (Cache, error)` with validation
+4. ✅ Implemented `ListCaches() []string` returning sorted names
+5. ✅ Created `tests/cache/registry_test.go` with 10 test functions:
+   - Registration validation (valid factory, empty name panic, nil factory panic)
+   - Cache creation (valid cache, unknown cache error, empty name error)
+   - Listing caches (sorted order verification)
+   - Concurrency tests (parallel registration and creation)
+6. ✅ Comprehensive godoc comments for Factory type and all public functions
 
 **Deliverables**:
-- ✅ Registry infrastructure complete
-- ✅ Thread-safe registration and lookup
+- ✅ Registry infrastructure complete with thread-safe operations
+- ✅ Silent overwriting behavior for duplicate registrations
 - ✅ Clear error messages for unknown cache types
-- ✅ Tests with 80%+ coverage including concurrency tests
+- ✅ Tests with 87.1% coverage including concurrency tests
+- ✅ Complete godoc documentation with examples
 
-**Estimated Effort**: 1-2 hours
+**Architectural Contributions**:
+- Established pluggable cache backend pattern
+- Implemented thread-safe registry with sync.RWMutex
+- Defined Factory function type for cache creation
+- Created foundation for Session 4 (filesystem implementation)
+
+**Actual Effort**: Combined with Session 4 in multi-session development
 
 ---
 
-#### Session 4: Filesystem Cache Implementation
+#### Session 4: Filesystem Cache Implementation ✅
 
 **Goal**: Implement filesystem cache with validation, logging, and persistence
 
-**Tasks**:
-1. Create `pkg/cache/filesystem.go` with `FilesystemCache` struct:
-   ```go
-   type FilesystemCache struct {
-       directory string
-       logger    Logger
-   }
-   ```
-2. Implement `NewFilesystem(c *config.CacheConfig) (Cache, error)` factory:
-   - Extract `directory` from `c.Options["directory"]`
-   - Validate required: return error if missing or empty
-   - Normalize path with `filepath.Abs()`
-   - Create directory if missing with 0755 permissions
-   - Validate directory is writable (attempt to create temp file)
-   - Extract optional `logger` from `c.Options["logger"]`, default to NoOpLogger
-   - Return fully-initialized FilesystemCache
-3. Implement `Get(key string) ([]byte, bool)`:
-   - Detect file extension from existing cache files (`.png`, `.jpg`)
-   - Read file with `os.ReadFile()`
-   - Log debug: `"cache.get"`, key, found status
-   - Return (data, true) on success, (nil, false) if not found
-   - Distinguish "not found" from actual errors (only return false for ENOENT)
-4. Implement `Set(key string, data []byte) error`:
-   - Detect image format from data header (PNG: `0x89 'P'`, JPEG: `0xFF 0xD8`)
-   - Determine file extension (`.png` or `.jpg`)
-   - Write file atomically with `os.WriteFile(filepath.Join(directory, key+ext), data, 0644)`
-   - Log debug: `"cache.set"`, key, size
-   - Return error on failure with context
-5. Implement `Invalidate(key string) error`:
-   - Check for both `.png` and `.jpg` extensions
-   - Remove file with `os.Remove()`
-   - Log debug: `"cache.invalidate"`, key
-   - Return nil if file doesn't exist (already invalidated)
-6. Implement `Clear() error`:
-   - Read directory with `os.ReadDir()`
-   - Remove only `.cache`, `.png`, `.jpg` files (safety: don't remove unknown files)
-   - Log info: `"cache.clear"`, file count
-   - Return error on failure
-7. Update `pkg/cache/registry.go` init():
-   ```go
-   func init() {
-       Register("filesystem", NewFilesystem)
-   }
-   ```
-8. Create `tests/cache/filesystem_test.go`:
-   - Test factory validation (missing directory, invalid path)
-   - Test directory auto-creation
-   - Test Get/Set/Invalidate/Clear operations with temp directories
-   - Test error conditions (permission denied simulations)
-   - Test concurrent access (multiple goroutines)
-   - Test logging (use mock logger to verify log calls)
+**Completed Tasks**:
+1. ✅ Created `pkg/cache/filesystem.go` with FilesystemCache using directory-per-key structure
+2. ✅ Implemented `NewFilesystem(c *config.CacheConfig) (Cache, error)` factory:
+   - Configuration Composition Pattern with `parseFilesystemConfig()`
+   - FilesystemCacheConfig type for typed configuration
+   - Directory validation (required, non-empty, type checking)
+   - Path normalization with `filepath.Abs()`
+   - Auto-creation of cache root directory (0755 permissions)
+   - Logger initialization from CacheConfig.Logger field
+3. ✅ Implemented `Get(key string) (*CacheEntry, error)`:
+   - Directory-per-key structure (cache_root/key/filename)
+   - Corruption detection (validates exactly 1 file exists)
+   - Returns ErrCacheEntryNotFound only for os.ErrNotExist
+   - Structured debug logging with key and found status
+4. ✅ Implemented `Set(entry *CacheEntry) error`:
+   - Creates key directory if needed (0755)
+   - Writes file with entry's filename (0644)
+   - Structured debug logging with key and size
+5. ✅ Implemented `Invalidate(key string) error`:
+   - Removes entire key directory (idempotent)
+   - Graceful handling of non-existent keys
+   - Structured debug logging
+6. ✅ Implemented `Clear() error`:
+   - Removes all subdirectories in cache root
+   - Continues on individual failures with warnings
+   - Structured info logging with file count
+7. ✅ Registered factory in init() function
+8. ✅ Created `tests/cache/filesystem_test.go` with 13 test functions:
+   - Factory validation (missing/empty/invalid directory option)
+   - Directory auto-creation for nested paths
+   - CRUD operations (Set/Get, Get not found, Invalidate, Clear)
+   - Directory-per-key structure validation
+   - Corruption detection (multiple files, directory instead of file)
+   - Concurrent access (50 parallel writes + 50 parallel reads)
+9. ✅ Added LoggerOutput enum and Output field to LoggerConfig
+10. ✅ Updated NewSlogger to derive output from config (removed io.Writer parameter)
+11. ✅ Updated CacheConfig to include Logger field and Merge() method
+12. ✅ Comprehensive godoc comments for all types and functions
 
 **Deliverables**:
-- ✅ `FilesystemCache` implementation complete
-- ✅ Registered in cache registry
-- ✅ Atomic file operations with proper error handling
-- ✅ Logging integrated at appropriate levels
-- ✅ Thread-safe concurrent access
-- ✅ Tests with 80%+ coverage
-- ✅ Clear error messages with context
+- ✅ FilesystemCache implementation with directory-per-key storage
+- ✅ Registered in cache registry as "filesystem"
+- ✅ Configuration Composition Pattern implementation
+- ✅ Proper error semantics (cache miss vs corruption vs filesystem errors)
+- ✅ Logging integrated at debug/info/warn levels
+- ✅ Thread-safe for concurrent operations on different keys
+- ✅ Tests with 87.1% coverage including concurrency and corruption tests
+- ✅ Complete godoc documentation
 
-**Estimated Effort**: 3-4 hours
+**Architectural Contributions**:
+- Demonstrated Configuration Composition Pattern for typed implementation configs
+- Established common Logger dependency pattern in base CacheConfig
+- Implemented LoggerOutput enum for configuration-driven output selection
+- Updated Logger.Merge() and CacheConfig.Merge() for layered configuration
+
+**Actual Effort**: Combined with Session 3 in multi-session development
 
 ---
 

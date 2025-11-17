@@ -133,3 +133,120 @@ func TestLogLevel_Constants(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggerOutput_Constants(t *testing.T) {
+	outputs := []config.LoggerOutput{
+		config.LoggerOutputDiscard,
+		config.LoggerOutputStdout,
+		config.LoggerOutputStderr,
+	}
+
+	expectedValues := []string{
+		"discard",
+		"stdout",
+		"stderr",
+	}
+
+	if len(outputs) != len(expectedValues) {
+		t.Fatalf("expected %d logger outputs, got %d", len(expectedValues), len(outputs))
+	}
+
+	for i, output := range outputs {
+		if string(output) != expectedValues[i] {
+			t.Errorf("output %d: expected %q, got %q", i, expectedValues[i], string(output))
+		}
+	}
+}
+
+func TestLoggerConfig_Merge_NilSource(t *testing.T) {
+	base := config.LoggerConfig{
+		Level:  config.LogLevelInfo,
+		Format: "text",
+		Output: config.LoggerOutputStderr,
+	}
+
+	base.Merge(nil)
+
+	// Should remain unchanged
+	if base.Level != config.LogLevelInfo {
+		t.Errorf("expected level %q, got %q", config.LogLevelInfo, base.Level)
+	}
+	if base.Format != "text" {
+		t.Errorf("expected format %q, got %q", "text", base.Format)
+	}
+	if base.Output != config.LoggerOutputStderr {
+		t.Errorf("expected output %q, got %q", config.LoggerOutputStderr, base.Output)
+	}
+}
+
+func TestLoggerConfig_Merge_EmptySource(t *testing.T) {
+	base := config.LoggerConfig{
+		Level:  config.LogLevelInfo,
+		Format: "text",
+		Output: config.LoggerOutputStderr,
+	}
+
+	source := &config.LoggerConfig{}
+	base.Merge(source)
+
+	// Should remain unchanged
+	if base.Level != config.LogLevelInfo {
+		t.Errorf("expected level %q, got %q", config.LogLevelInfo, base.Level)
+	}
+	if base.Format != "text" {
+		t.Errorf("expected format %q, got %q", "text", base.Format)
+	}
+	if base.Output != config.LoggerOutputStderr {
+		t.Errorf("expected output %q, got %q", config.LoggerOutputStderr, base.Output)
+	}
+}
+
+func TestLoggerConfig_Merge_PartialSource(t *testing.T) {
+	base := config.LoggerConfig{
+		Level:  config.LogLevelInfo,
+		Format: "text",
+		Output: config.LoggerOutputStderr,
+	}
+
+	source := &config.LoggerConfig{
+		Level: config.LogLevelDebug,
+	}
+
+	base.Merge(source)
+
+	if base.Level != config.LogLevelDebug {
+		t.Errorf("expected level %q, got %q", config.LogLevelDebug, base.Level)
+	}
+	if base.Format != "text" {
+		t.Errorf("expected format %q (unchanged), got %q", "text", base.Format)
+	}
+	if base.Output != config.LoggerOutputStderr {
+		t.Errorf("expected output %q (unchanged), got %q", config.LoggerOutputStderr, base.Output)
+	}
+}
+
+func TestLoggerConfig_Merge_FullSource(t *testing.T) {
+	base := config.LoggerConfig{
+		Level:  config.LogLevelInfo,
+		Format: "text",
+		Output: config.LoggerOutputStderr,
+	}
+
+	source := &config.LoggerConfig{
+		Level:  config.LogLevelWarn,
+		Format: "json",
+		Output: config.LoggerOutputStdout,
+	}
+
+	base.Merge(source)
+
+	if base.Level != config.LogLevelWarn {
+		t.Errorf("expected level %q, got %q", config.LogLevelWarn, base.Level)
+	}
+	if base.Format != "json" {
+		t.Errorf("expected format %q, got %q", "json", base.Format)
+	}
+	if base.Output != config.LoggerOutputStdout {
+		t.Errorf("expected output %q, got %q", config.LoggerOutputStdout, base.Output)
+	}
+}

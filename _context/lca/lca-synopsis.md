@@ -161,6 +161,14 @@ The same pattern at every layer means the same mental model from code to cloud. 
 - Configuration should never leak into business logic
 - Choose appropriate configuration type: Type 1 (initialization-only, discard after), Type 2 (immutable runtime settings, store directly), or Type 3 (mutable runtime settings, validate mutations)
 
+### When Designing Interfaces with Multiple Implementations
+- Base configuration contains common fields shared across all implementations
+- Options map (`map[string]any`) stores implementation-specific configuration as flexible data
+- Parse functions transform options map into typed implementation-specific config structs
+- Transformation boundary validates both common and implementation-specific configurations
+- Works with any instantiation pattern: factories, registries, or dependency injection
+- **Pattern**: `BaseConfig + Options map → Parse → TypedImplConfig → Validate → Behavior`
+
 ### When Building Libraries
 - Module boundaries should be clear and stable
 - Public APIs should expose interfaces, not concrete types

@@ -226,6 +226,139 @@ func (p *ConnectionPool) SetMaxConnections(max int) error {
 - Interface-based APIs prevent exposure of implementation details
 - Enables clean testing through interface mocks
 
+### Configuration Composition Pattern
+**Principle**: When an interface has multiple implementations with divergent configuration needs, compose configuration hierarchically: base configuration with common fields + implementation-specific options map that transforms into typed implementation config.
+
+**Rationale**: Interfaces with multiple implementations need flexible configuration that accommodates varying implementation requirements while maintaining type safety. The options map provides flexibility at the data layer; typed parsing provides safety at the transformation boundary. Common config fields initialize shared dependencies used across implementations.
+
+**Structure**:
+```go
+// Base configuration with common fields
+type BaseConfig struct {
+    CommonField config.SomeConfig `json:"common_field"` // Shared dependency config
+    Options     map[string]any    `json:"options"`      // Implementation-specific
+}
+
+// Implementation-specific typed config
+type ImplementationConfig struct {
+    SpecificField string
+    // Only fields specific to this implementation
+}
+```
+
+**Transformation Flow**:
+```
+BaseConfig (data, JSON-serializable)
+    ↓
+Parse Options map[string]any → ImplementationConfig (typed struct)
+    ↓
+Initialize dependencies from embedded configurations
+    ↓
+Create implementation with dependencies → Concrete type implementing Interface
+```
+
+**Implementation Pattern**:
+```go
+func NewImplementation(base BaseConfig) (Interface, error) {
+    // 1. Parse implementation-specific options
+    implConfig, err := parseImplementationConfig(base.Options)
+    if err != nil {
+        return nil, fmt.Errorf("invalid options: %w", err)
+    }
+
+    // 2. Initialize dependencies from embedded configurations
+
+    // 3. Validate implementation-specific logic
+    if err := validateImplementationLogic(implConfig); err != nil {
+        return nil, err
+    }
+
+    // 4. Create implementation with dependencies (satisfies Interface)
+    return &concreteImplementation{
+        field: implConfig.SpecificField,
+    }, nil
+}
+
+func parseImplementationConfig(options map[string]any) (*ImplementationConfig, error) {
+    fieldVal, ok := options["specific_field"]
+    if !ok {
+        return nil, fmt.Errorf("specific_field is required")
+    }
+
+    field, ok := fieldVal.(string)
+    if !ok {
+        return nil, fmt.Errorf("specific_field must be a string")
+    }
+
+    return &ImplementationConfig{
+        SpecificField: field,
+    }, nil
+}
+```
+
+**Key Characteristics**:
+- **Base Configuration**: Contains fields for initializing dependencies shared across implementations
+- **Options Map**: Flexible container for implementation-specific configuration (JSON-serializable)
+- **Typed Implementation Config**: Parsed, validated struct specific to one implementation
+- **Dependency Initialization**: Common config fields create dependencies (logger, connections, etc.)
+- **Validation Layers**: Type validation during parsing, business logic validation after parsing
+
+**Benefits**:
+- JSON-serializable configuration supports file-based and API-based config
+- Type safety after transformation boundary (map → struct → validation → behavior)
+- New implementations don't require base config changes
+- Clear error messages during parsing phase
+- Implementation configs evolve independently
+- Shared dependencies initialized consistently
+
+**Real-World Example** (Cache Interface):
+```go
+// Base: CacheConfig with common logger config
+type CacheConfig struct {
+    Logger  config.LoggerConfig `json:"logger"`  // Common dependency config
+    Options map[string]any      `json:"options"` // Implementation-specific
+}
+
+// Implementation-specific: FilesystemCacheConfig
+type FilesystemCacheConfig struct {
+    Directory string
+}
+
+// Transformation
+func NewFilesystem(c *config.CacheConfig) (Cache, error) {
+    // 1. Parse implementation-specific options
+    fsConfig, err := parseFilesystemConfig(c.Options)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. Initialize dependencies from embedded configurations
+    log, err := logger.NewSlogger(c.Logger, output)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. Validate implementation logic
+    absPath, err := filepath.Abs(fsConfig.Directory)
+    if err != nil {
+        return nil, err
+    }
+
+    // 4. Create implementation (satisfies Cache interface)
+    return &FilesystemCache{
+        directory: absPath,
+        logger:    log,
+    }, nil
+}
+```
+
+**When to Use**:
+- Defining an interface with multiple implementations
+- Implementations have different configuration requirements
+- Need JSON-serializable configuration
+- Shared dependencies (logger, connection pools, etc.) across implementations
+- Implementation-specific configuration varies significantly
+
 ### Package Organization Depth
 **Principle**: Avoid package subdirectories deeper than a single level. Deep nesting often indicates over-engineered abstractions or unclear responsibility boundaries.
 

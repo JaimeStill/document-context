@@ -21,6 +21,8 @@ This library provides format-agnostic interfaces for document processing with ex
 - Page-level image extraction
 - Multiple output formats (PNG, JPEG)
 - Configurable quality and resolution
+- Persistent filesystem caching for rendered images
+- Structured logging infrastructure
 - Base64 data URI encoding for LLM APIs
 
 ## Prerequisites
@@ -226,6 +228,94 @@ func main() {
     fmt.Println("Successfully converted page with defaults")
 }
 ```
+
+### Using the Filesystem Cache
+
+Enable persistent caching to avoid redundant PDF rendering:
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+
+    "github.com/JaimeStill/document-context/pkg/cache"
+    "github.com/JaimeStill/document-context/pkg/config"
+    "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
+)
+
+func main() {
+    // Create cache configuration
+    cacheCfg := &config.CacheConfig{
+        Name: "filesystem",
+        Logger: config.LoggerConfig{
+            Level: config.LogLevelInfo,
+        },
+        Options: map[string]any{
+            "directory": "/var/cache/document-context",
+        },
+    }
+
+    // Create cache instance
+    c, err := cache.Create(cacheCfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to create cache: %v\n", err)
+        return
+    }
+
+    // Create renderer
+    imgCfg := config.DefaultImageConfig()
+    renderer, err := image.NewImageMagickRenderer(imgCfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to create renderer: %v\n", err)
+        return
+    }
+
+    // Open document
+    doc, err := document.OpenPDF("large-document.pdf")
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to open PDF: %v\n", err)
+        return
+    }
+    defer doc.Close()
+
+    // Convert page with caching
+    page, err := doc.ExtractPage(1)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to extract page: %v\n", err)
+        return
+    }
+
+    // First call: renders and caches
+    // Subsequent calls: returns cached result
+    imageData, err := page.ToImage(renderer, c)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to convert page: %v\n", err)
+        return
+    }
+
+    err = os.WriteFile("page-1.png", imageData, 0644)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to write image: %v\n", err)
+        return
+    }
+
+    fmt.Println("Successfully converted page (cached for future use)")
+}
+```
+
+**Cache Behavior**:
+- First conversion: Renders page and stores in cache
+- Subsequent conversions: Returns cached image immediately (no rendering)
+- Cache keys are generated from document path, page number, and all rendering parameters
+- Changing any parameter (DPI, quality, filters) creates a new cache entry
+
+**Benefits**:
+- Dramatically faster repeated conversions of the same page
+- Reduces CPU usage for frequently accessed documents
+- Transparent - works without code changes (pass cache vs nil)
 
 ### Data URI Encoding for LLM APIs
 
@@ -671,10 +761,10 @@ func main() {
 - Metadata extraction
 
 **Processing Enhancements**:
+- ~~Caching layer for repeated operations~~ ✅ Implemented (Phase 2 Sessions 2-4)
 - Parallel page processing
 - Streaming for large documents
 - Intelligent chunking strategies
-- Caching layer for repeated operations
 
 See [PROJECT.md](./PROJECT.md) for detailed roadmap.
 

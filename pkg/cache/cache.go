@@ -23,10 +23,6 @@ type CacheEntry struct {
 	// Filename is a suggested filename for the cached image, formatted as
 	// "basename.pagenum.ext" (e.g., "document.1.png").
 	Filename string
-
-	// MimeType is the MIME content type for the image data
-	// (e.g., "image/png", "image/jpeg").
-	MimeType string
 }
 
 // Cache defines the interface for storing and retrieving rendered document images.
@@ -58,7 +54,6 @@ type CacheEntry struct {
 //	    Key:      key,
 //	    Data:     imageData,
 //	    Filename: "document.1.png",
-//	    MimeType: "image/png",
 //	}
 //	cache.Set(entry)
 type Cache interface {

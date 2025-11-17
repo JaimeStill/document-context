@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 
 	"github.com/JaimeStill/document-context/pkg/config"
 )
@@ -46,8 +47,20 @@ type Slogger struct {
 //	}
 //
 // Returns an error if the log level or format is invalid.
-func NewSlogger(cfg config.LoggerConfig, output io.Writer) (Logger, error) {
+func NewSlogger(cfg config.LoggerConfig) (Logger, error) {
 	cfg.Finalize()
+
+	var output io.Writer
+	switch cfg.Output {
+	case config.LoggerOutputDiscard, "":
+		output = io.Discard
+	case config.LoggerOutputStdout:
+		output = os.Stdout
+	case config.LoggerOutputStderr:
+		output = os.Stderr
+	default:
+		return nil, fmt.Errorf("invalid output: %s", cfg.Output)
+	}
 
 	if cfg.Level == config.LogLevelDisabled {
 		output = io.Discard

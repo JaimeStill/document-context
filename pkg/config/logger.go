@@ -24,6 +24,20 @@ const (
 	LogLevelDisabled LogLevel = "disabled"
 )
 
+// LoggerOutput specifies where log output should be written.
+type LoggerOutput string
+
+const (
+	// LoggerOutputDiscard discards all log output (io.Discard).
+	LoggerOutputDiscard LoggerOutput = "discard"
+
+	// LoggerOutputStdout writes log output to standard output (os.Stdout).
+	LoggerOutputStdout LoggerOutput = "stdout"
+
+	// LoggerOutputStderr writes log output to standard error (os.Stderr).
+	LoggerOutputStderr LoggerOutput = "stderr"
+)
+
 // LoggerConfig defines configuration for logger initialization.
 //
 // This configuration follows the Configuration Transformation Pattern (Type 1).
@@ -38,6 +52,8 @@ type LoggerConfig struct {
 	// Format specifies the log output format: "text" or "json".
 	// Defaults to "text".
 	Format string `json:"format,omitempty"`
+
+	Output LoggerOutput `json:"output"`
 }
 
 // DefaultLoggerConfig returns a LoggerConfig with sensible defaults.
@@ -81,5 +97,28 @@ func (c *LoggerConfig) Finalize() {
 	}
 	if c.Format == "" {
 		c.Format = defaults.Format
+	}
+}
+
+// Merge overlays non-empty values from source onto the receiver.
+//
+// This method supports layered configuration composition by selectively
+// overriding only the fields that are explicitly set in the source configuration.
+// Empty string values in the source are ignored, preserving the receiver's values.
+//
+// Merge is used internally by CacheConfig.Merge to compose logger configurations
+// across configuration layers.
+func (l *LoggerConfig) Merge(source *LoggerConfig) {
+	if source == nil {
+		return
+	}
+	if source.Level != "" {
+		l.Level = source.Level
+	}
+	if source.Format != "" {
+		l.Format = source.Format
+	}
+	if source.Output != "" {
+		l.Output = source.Output
 	}
 }

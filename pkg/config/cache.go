@@ -11,7 +11,8 @@ import "maps"
 //
 // Validation of Name and Options values is performed by the consuming package.
 type CacheConfig struct {
-	Name    string         `json:"name"`             // Cache implementation name (e.g., "memory", "filesystem")
+	Name    string         `json:"name"` // Cache implementation name (e.g., "memory", "filesystem")
+	Logger  LoggerConfig   `json:"logger"`
 	Options map[string]any `json:"options,omitempty"` // Implementation-specific options
 }
 
@@ -22,6 +23,7 @@ type CacheConfig struct {
 func DefaultCacheConfig() CacheConfig {
 	return CacheConfig{
 		Name:    "",
+		Logger:  DefaultLoggerConfig(),
 		Options: make(map[string]any),
 	}
 }
@@ -35,9 +37,15 @@ func DefaultCacheConfig() CacheConfig {
 // For Options, existing keys are overwritten by source values, and new keys are added.
 // This enables layered configuration and option overrides.
 func (c *CacheConfig) Merge(source *CacheConfig) {
+	if source == nil {
+		return
+	}
+
 	if source.Name != "" {
 		c.Name = source.Name
 	}
+
+	c.Logger.Merge(&source.Logger)
 
 	if source.Options != nil {
 		if c.Options == nil {

@@ -120,6 +120,32 @@ func TestCacheConfig_Merge(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "merge logger config",
+			base: config.CacheConfig{
+				Logger: config.LoggerConfig{
+					Level:  config.LogLevelInfo,
+					Format: "text",
+					Output: config.LoggerOutputStderr,
+				},
+			},
+			source: config.CacheConfig{
+				Logger: config.LoggerConfig{
+					Level: config.LogLevelDebug,
+				},
+			},
+			checkFn: func(t *testing.T, result config.CacheConfig) {
+				if result.Logger.Level != config.LogLevelDebug {
+					t.Errorf("expected logger level %q, got %q", config.LogLevelDebug, result.Logger.Level)
+				}
+				if result.Logger.Format != "text" {
+					t.Errorf("expected logger format %q (unchanged), got %q", "text", result.Logger.Format)
+				}
+				if result.Logger.Output != config.LoggerOutputStderr {
+					t.Errorf("expected logger output %q (unchanged), got %q", config.LoggerOutputStderr, result.Logger.Output)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,23 +166,28 @@ func TestCacheConfig_JSON_Marshal(t *testing.T) {
 			name: "full config",
 			config: config.CacheConfig{
 				Name: "filesystem",
+				Logger: config.LoggerConfig{
+					Level:  config.LogLevelInfo,
+					Format: "text",
+					Output: config.LoggerOutputStderr,
+				},
 				Options: map[string]any{
 					"directory": "/var/cache",
 				},
 			},
-			expected: `{"name":"filesystem","options":{"directory":"/var/cache"}}`,
+			expected: `{"name":"filesystem","logger":{"level":"info","format":"text","output":"stderr"},"options":{"directory":"/var/cache"}}`,
 		},
 		{
 			name: "name only",
 			config: config.CacheConfig{
 				Name: "memory",
 			},
-			expected: `{"name":"memory"}`,
+			expected: `{"name":"memory","logger":{"output":""}}`,
 		},
 		{
 			name:     "empty config",
 			config:   config.CacheConfig{},
-			expected: `{"name":""}`,
+			expected: `{"name":"","logger":{"output":""}}`,
 		},
 	}
 
@@ -183,10 +214,19 @@ func TestCacheConfig_JSON_Unmarshal(t *testing.T) {
 	}{
 		{
 			name: "full config",
-			json: `{"name":"filesystem","options":{"directory":"/var/cache","size":1000}}`,
+			json: `{"name":"filesystem","logger":{"level":"debug","format":"json","output":"stdout"},"options":{"directory":"/var/cache","size":1000}}`,
 			checkFn: func(t *testing.T, cfg config.CacheConfig) {
 				if cfg.Name != "filesystem" {
 					t.Errorf("expected Name 'filesystem', got %q", cfg.Name)
+				}
+				if cfg.Logger.Level != config.LogLevelDebug {
+					t.Errorf("expected Logger.Level 'debug', got %q", cfg.Logger.Level)
+				}
+				if cfg.Logger.Format != "json" {
+					t.Errorf("expected Logger.Format 'json', got %q", cfg.Logger.Format)
+				}
+				if cfg.Logger.Output != config.LoggerOutputStdout {
+					t.Errorf("expected Logger.Output 'stdout', got %q", cfg.Logger.Output)
 				}
 				if cfg.Options["directory"] != "/var/cache" {
 					t.Errorf("expected directory '/var/cache', got %v", cfg.Options["directory"])
@@ -235,6 +275,11 @@ func TestCacheConfig_JSON_Unmarshal(t *testing.T) {
 func TestCacheConfig_JSON_RoundTrip(t *testing.T) {
 	original := config.CacheConfig{
 		Name: "filesystem",
+		Logger: config.LoggerConfig{
+			Level:  config.LogLevelWarn,
+			Format: "json",
+			Output: config.LoggerOutputStdout,
+		},
 		Options: map[string]any{
 			"directory": "/var/cache",
 			"size":      1000,
@@ -255,6 +300,16 @@ func TestCacheConfig_JSON_RoundTrip(t *testing.T) {
 
 	if decoded.Name != original.Name {
 		t.Errorf("Name: expected %q, got %q", original.Name, decoded.Name)
+	}
+
+	if decoded.Logger.Level != original.Logger.Level {
+		t.Errorf("Logger.Level: expected %q, got %q", original.Logger.Level, decoded.Logger.Level)
+	}
+	if decoded.Logger.Format != original.Logger.Format {
+		t.Errorf("Logger.Format: expected %q, got %q", original.Logger.Format, decoded.Logger.Format)
+	}
+	if decoded.Logger.Output != original.Logger.Output {
+		t.Errorf("Logger.Output: expected %q, got %q", original.Logger.Output, decoded.Logger.Output)
 	}
 
 	if decoded.Options["directory"] != original.Options["directory"] {

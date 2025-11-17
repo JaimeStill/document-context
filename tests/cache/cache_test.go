@@ -75,7 +75,6 @@ func TestCacheEntry_Structure(t *testing.T) {
 		Key:      "test-key",
 		Data:     []byte{0x89, 'P', 'N', 'G'},
 		Filename: "document.1.png",
-		MimeType: "image/png",
 	}
 
 	if entry.Key != "test-key" {
@@ -88,10 +87,6 @@ func TestCacheEntry_Structure(t *testing.T) {
 
 	if entry.Filename != "document.1.png" {
 		t.Errorf("expected filename %q, got %q", "document.1.png", entry.Filename)
-	}
-
-	if entry.MimeType != "image/png" {
-		t.Errorf("expected mime type %q, got %q", "image/png", entry.MimeType)
 	}
 }
 
