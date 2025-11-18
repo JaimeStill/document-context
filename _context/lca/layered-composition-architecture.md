@@ -282,6 +282,270 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 
 ---
 
+## Configuration Composition Pattern
+
+### When Multiple Implementations Need Different Configuration
+
+**Problem**: An interface has multiple implementations with divergent configuration requirements. Some settings are universal (shared across all implementations), while others are implementation-specific.
+
+**Solution**: Base configuration with universal fields + Options map for implementation-specific settings. Implementation-specific typed config parses and validates the Options map.
+
+### Base Pattern Structure
+
+```go
+// Base configuration - universal settings + Options map
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`   // Universal
+    DPI     int            `json:"dpi,omitempty"`      // Universal
+    Quality int            `json:"quality,omitempty"`  // Universal
+    Options map[string]any `json:"options,omitempty"`  // Implementation-specific
+}
+
+// Implementation-specific typed configuration
+type FilesystemCacheConfig struct {
+    Directory string  // Specific to filesystem implementation
+}
+
+// Parsing function: Options map → Typed config
+func parseFilesystemConfig(options map[string]any) (*FilesystemCacheConfig, error) {
+    dir, ok := options["directory"].(string)
+    if !ok {
+        return nil, fmt.Errorf("directory must be a string")
+    }
+
+    return &FilesystemCacheConfig{
+        Directory: dir,
+    }, nil
+}
+```
+
+### Enhanced Pattern: Embedded Base Configuration
+
+**Refinement**: Implementation-specific config embeds the base config, creating a single "fully realized" configuration containing both universal and specific settings.
+
+**Structure**:
+```go
+// Base configuration (universal settings)
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`
+    DPI     int            `json:"dpi,omitempty"`
+    Quality int            `json:"quality,omitempty"`
+    Options map[string]any `json:"options,omitempty"`
+}
+
+// Implementation-specific config EMBEDS base
+type ImageMagickConfig struct {
+    Config     ImageConfig  // Embedded base configuration
+    Background string       // ImageMagick-specific
+    Brightness *int         // ImageMagick-specific (nil = omit)
+    Contrast   *int         // ImageMagick-specific (nil = omit)
+}
+
+// Domain object stores single complete configuration
+type imagemagickRenderer struct {
+    settings ImageMagickConfig  // Contains both base + specific
+}
+```
+
+### Transformation Flow
+
+```
+JSON/File Configuration
+    ↓ (unmarshal)
+BaseConfig (ImageConfig with Options map)
+    ↓ (parse + validate)
+Implementation Config (ImageMagickConfig with embedded base)
+    ↓ (construct)
+Domain Object (imagemagickRenderer with settings)
+```
+
+### Implementation Pattern
+
+```go
+// Parse function embeds base and adds specific fields
+func parseImageMagickConfig(cfg config.ImageConfig) (*ImageMagickConfig, error) {
+    imCfg := &ImageMagickConfig{
+        Config:     cfg,      // Embed base config
+        Background: "white",  // Default implementation-specific
+    }
+
+    // Parse Options map into typed fields
+    if bg, ok := cfg.Options["background"]; ok {
+        bgStr, ok := bg.(string)
+        if !ok {
+            return nil, fmt.Errorf("background must be a string")
+        }
+        if bgStr == "" {
+            return nil, fmt.Errorf("background cannot be empty")
+        }
+        imCfg.Background = bgStr
+    }
+
+    if b, ok := cfg.Options["brightness"]; ok {
+        brightness, ok := b.(int)
+        if !ok {
+            return nil, fmt.Errorf("brightness must be an integer")
+        }
+        if brightness < 0 || brightness > 200 {
+            return nil, fmt.Errorf("brightness must be 0-200")
+        }
+        imCfg.Brightness = &brightness
+    }
+
+    // Validate and parse other options...
+
+    return imCfg, nil
+}
+
+// Constructor creates domain object with complete config
+func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
+    cfg.Finalize()  // Merge defaults
+
+    // Validate universal settings
+    if cfg.Format != "png" && cfg.Format != "jpg" {
+        return nil, fmt.Errorf("unsupported format: %s", cfg.Format)
+    }
+
+    // Parse Options into implementation config (embeds base)
+    imCfg, err := parseImageMagickConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("invalid ImageMagick options: %w", err)
+    }
+
+    return &imagemagickRenderer{
+        settings: *imCfg,  // Single field contains everything
+    }, nil
+}
+```
+
+### Interface Method Implementation
+
+```go
+// Settings() returns embedded base config
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings.Config  // Access embedded base
+}
+
+// Parameters() returns implementation-specific params
+func (r *imagemagickRenderer) Parameters() []string {
+    params := []string{
+        fmt.Sprintf("background=%s", r.settings.Background),
+    }
+    if r.settings.Brightness != nil {
+        params = append(params, fmt.Sprintf("brightness=%d", *r.settings.Brightness))
+    }
+    return params
+}
+
+// Render() accesses both base and specific settings
+func (r *imagemagickRenderer) Render(input string, page int, output string) error {
+    // Access base: r.settings.Config.DPI
+    // Access specific: r.settings.Background, r.settings.Brightness
+    args := r.buildArgs()
+    // ...
+}
+```
+
+### Key Characteristics
+
+**Base Configuration**:
+- Contains universal settings shared across all implementations
+- Contains Options map for flexibility
+- JSON-serializable for file-based configuration
+- Independent of any specific implementation
+
+**Options Map**:
+- Flexible container: `map[string]any`
+- Accommodates varying implementation requirements
+- Validated during parsing (type assertions + business rules)
+- Fails fast with clear error messages
+
+**Implementation-Specific Config**:
+- Embeds base configuration
+- Adds typed fields specific to implementation
+- Created by parsing Options map
+- Represents "fully realized" configuration
+
+**Domain Object Storage**:
+- Stores single `settings` field (implementation-specific config)
+- Access base via `settings.Config`
+- Access specific via `settings.SpecificField`
+- Natural encapsulation of complete configuration
+
+### Benefits
+
+**Enhanced Pattern Benefits**:
+- **Single storage field**: One `settings` instead of separate `settings` + `options`
+- **Natural encapsulation**: Implementation config is complete configuration
+- **Cleaner access patterns**: `r.settings.Config.DPI` for base, `r.settings.Background` for specific
+- **Simple interface methods**: `Settings()` returns `r.settings.Config`
+- **Clear semantics**: Embedded Config = universal, other fields = specific
+
+**General Pattern Benefits**:
+- **JSON-serializable**: File-based and API-based configuration
+- **Type safety**: After Options map → typed struct transformation
+- **Extensible**: New implementations don't require base config changes
+- **Independent evolution**: Implementation configs evolve separately
+- **Clear errors**: Type validation during parsing, business validation after
+- **Shared dependencies**: Universal fields initialize common dependencies
+
+### When to Use
+
+**Use Configuration Composition Pattern when**:
+- Defining interface with multiple implementations
+- Implementations have different configuration requirements
+- Need JSON-serializable configuration
+- Shared dependencies across implementations
+- Implementation-specific configuration varies significantly
+
+**Use Enhanced Pattern (Embedded Base) when**:
+- Implementation needs both base and specific config during operations
+- Configuration is Type 2 (Immutable Runtime Settings)
+- Interface requires Settings() and Parameters() methods
+- Cleaner encapsulation outweighs slightly increased parsing complexity
+
+### Real-World Examples
+
+**Cache Interface** (Base Pattern):
+```go
+type CacheConfig struct {
+    Logger  LoggerConfig   `json:"logger"`   // Common dependency
+    Options map[string]any `json:"options"`  // Implementation-specific
+}
+
+type FilesystemCacheConfig struct {
+    Directory string
+}
+
+func NewFilesystem(c *config.CacheConfig) (Cache, error) {
+    // Parse Options → FilesystemCacheConfig
+    // Initialize logger from CacheConfig.Logger
+    // Create FilesystemCache with parsed config + logger
+}
+```
+
+**Renderer Interface** (Enhanced Pattern):
+```go
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`
+    DPI     int            `json:"dpi,omitempty"`
+    Options map[string]any `json:"options,omitempty"`
+}
+
+type ImageMagickConfig struct {
+    Config     ImageConfig  // Embedded base
+    Background string
+    Brightness *int
+}
+
+func NewImageMagickRenderer(cfg ImageConfig) (Renderer, error) {
+    // Parse into ImageMagickConfig (embeds base + adds specific)
+    // Store single settings field
+}
+```
+
+---
+
 ## Interface-Based Public APIs
 
 ### Pattern: Interface as Public Contract

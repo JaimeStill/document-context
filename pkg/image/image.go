@@ -47,4 +47,19 @@ type Renderer interface {
 	// The configuration is immutable after renderer creation - it cannot be
 	// changed through this interface.
 	Settings() config.ImageConfig
+
+	// Parameters returns implementation-specific rendering parameters for cache key generation.
+	//
+	// This method provides a deterministic string representation of all implementation-specific
+	// settings that affect render output but are not part of the base ImageConfig. These
+	// parameters complement Settings() in cache key generation to ensure different
+	// configurations produce unique cache entries.
+	//
+	// Format: Returns a slice of "key=value" strings in consistent (typically alphabetical) order.
+	//
+	// Example (ImageMagick): ["background=white", "brightness=10", "contrast=-5"]
+	//
+	// The returned parameters must be deterministic - the same configuration must always
+	// produce the same parameter list in the same order to ensure cache key consistency.
+	Parameters() []string
 }

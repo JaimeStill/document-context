@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/JaimeStill/document-context/pkg/cache"
-	"github.com/JaimeStill/document-context/pkg/config"
 	"github.com/JaimeStill/document-context/pkg/image"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
@@ -104,7 +103,7 @@ func (p *PDFPage) Number() int {
 // Returns the rendered image data as bytes, or an error if rendering fails.
 func (p *PDFPage) ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error) {
 	if c != nil {
-		key, err := p.buildCacheKey(renderer.Settings())
+		key, err := p.buildCacheKey(renderer)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +138,7 @@ func (p *PDFPage) ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error
 	}
 
 	if c != nil {
-		entry, err := p.prepareCache(imgData, renderer.Settings())
+		entry, err := p.prepareCache(imgData, renderer)
 		if err != nil {
 			return nil, err
 		}
@@ -172,35 +171,23 @@ func (p *PDFPage) ToImage(renderer image.Renderer, c cache.Cache) ([]byte, error
 // hexadecimal key. The same inputs always produce the same key.
 //
 // Returns an error if the document path cannot be normalized to an absolute path.
-func (p *PDFPage) buildCacheKey(settings config.ImageConfig) (string, error) {
+func (p *PDFPage) buildCacheKey(renderer image.Renderer) (string, error) {
 	absPath, err := filepath.Abs(p.doc.path)
 	if err != nil {
 		return "", fmt.Errorf("failed to normalize path: %w", err)
 	}
 
+	settings := renderer.Settings()
+
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("%s/%d.%s", absPath, p.number, settings.Format))
 
-	params := make([]string, 0)
-
-	params = append(params, fmt.Sprintf("dpi=%d", settings.DPI))
-	params = append(params, fmt.Sprintf("quality=%d", settings.Quality))
-
-	if settings.Brightness != nil {
-		params = append(params, fmt.Sprintf("brightness=%d", *settings.Brightness))
+	params := []string{
+		fmt.Sprintf("dpi=%d", settings.DPI),
+		fmt.Sprintf("quality=%d", settings.Quality),
 	}
 
-	if settings.Contrast != nil {
-		params = append(params, fmt.Sprintf("contrast=%d", *settings.Contrast))
-	}
-
-	if settings.Rotation != nil {
-		params = append(params, fmt.Sprintf("rotation=%d", *settings.Rotation))
-	}
-
-	if settings.Saturation != nil {
-		params = append(params, fmt.Sprintf("saturation=%d", *settings.Saturation))
-	}
+	params = append(params, renderer.Parameters()...)
 
 	builder.WriteString(fmt.Sprintf("?%s", strings.Join(params, "&")))
 
@@ -222,12 +209,13 @@ func (p *PDFPage) buildCacheKey(settings config.ImageConfig) (string, error) {
 //
 // Returns a complete cache entry ready for storage, or an error if the cache
 // key cannot be generated.
-func (p *PDFPage) prepareCache(data []byte, settings config.ImageConfig) (*cache.CacheEntry, error) {
-	key, err := p.buildCacheKey(settings)
+func (p *PDFPage) prepareCache(data []byte, renderer image.Renderer) (*cache.CacheEntry, error) {
+	key, err := p.buildCacheKey(renderer)
 	if err != nil {
 		return nil, err
 	}
 
+	settings := renderer.Settings()
 	baseName := filepath.Base(p.doc.path)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)

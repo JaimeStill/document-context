@@ -446,6 +446,83 @@ func main() {
 }
 ```
 
+### Applying Enhancement Filters
+
+Improve document clarity with ImageMagick filters:
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+
+    "github.com/JaimeStill/document-context/pkg/config"
+    "github.com/JaimeStill/document-context/pkg/document"
+    "github.com/JaimeStill/document-context/pkg/image"
+)
+
+func main() {
+    // Create configuration with enhancement filters
+    cfg := config.ImageConfig{
+        Format: "png",
+        DPI:    300,
+        Options: map[string]any{
+            "brightness": 110,  // Increase brightness (0-200, 100=neutral)
+            "contrast":   10,   // Increase contrast (-100 to +100, 0=neutral)
+            "saturation": 90,   // Slightly desaturate (0-200, 100=neutral)
+        },
+    }
+
+    renderer, err := image.NewImageMagickRenderer(cfg)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
+        return
+    }
+
+    doc, err := document.OpenPDF("faded-scan.pdf")
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+    defer doc.Close()
+
+    page, err := doc.ExtractPage(1)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
+    // Convert with filters applied
+    imageData, err := page.ToImage(renderer, nil)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
+    err = os.WriteFile("enhanced-page-1.png", imageData, 0644)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        return
+    }
+
+    fmt.Println("Successfully converted page with filters")
+}
+```
+
+**Available Filters**:
+- `brightness`: 0-200 (100 is neutral, <100 darkens, >100 lightens)
+- `contrast`: -100 to +100 (0 is neutral, negative decreases, positive increases)
+- `saturation`: 0-200 (100 is neutral, <100 desaturates, >100 increases color)
+- `rotation`: 0-360 degrees (clockwise rotation)
+- `background`: Color name for alpha channel (default: "white")
+
+**Common Use Cases**:
+- Faded documents: Increase brightness and contrast
+- Low-quality scans: Adjust brightness, increase contrast, desaturate slightly
+- Dark scans: Increase brightness significantly
+- Rotated pages: Use rotation to correct orientation
+
 ### Integration with go-agents
 
 Use document-context with go-agents for LLM analysis:
@@ -546,17 +623,17 @@ The library uses a configuration-to-renderer transformation pattern. Configurati
 
 ```go
 type ImageConfig struct {
-    Format     string  // "png" or "jpg"
-    Quality    int     // JPEG quality (1-100), ignored for PNG
-    DPI        int     // Resolution in dots per inch
-    Brightness *int    // -100 to +100 (Session 5)
-    Contrast   *int    // -100 to +100 (Session 5)
-    Saturation *int    // -100 to +100 (Session 5)
-    Rotation   *int    // 0 to 360 degrees (Session 5)
+    Format  string         // "png" or "jpg"
+    Quality int            // JPEG quality (1-100), ignored for PNG
+    DPI     int            // Resolution in dots per inch
+    Options map[string]any // Implementation-specific options (filters, etc.)
 }
 ```
 
-**Filter fields** use pointers to distinguish "not set" (nil) from "explicitly zero" (pointer to 0). Filter application will be implemented in Phase 2 Session 5.
+**Options map** contains implementation-specific settings:
+- **ImageMagick filters**: brightness (0-200, 100=neutral), contrast (-100 to +100, 0=neutral), saturation (0-200, 100=neutral), rotation (0-360 degrees)
+- **Background color**: "white", "black", "transparent", or any ImageMagick color name
+- Settings are parsed and validated during renderer creation
 
 ### Creating a Renderer
 

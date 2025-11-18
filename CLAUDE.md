@@ -359,6 +359,116 @@ func NewFilesystem(c *config.CacheConfig) (Cache, error) {
 - Shared dependencies (logger, connection pools, etc.) across implementations
 - Implementation-specific configuration varies significantly
 
+#### Enhanced Pattern: Embedded Base Configuration
+
+**Principle**: Implementation-specific configuration struct embeds the base configuration, creating a single "fully realized" configuration that contains both universal and implementation-specific settings.
+
+**Structure**:
+```go
+// Base configuration (universal settings)
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`
+    DPI     int            `json:"dpi,omitempty"`
+    Quality int            `json:"quality,omitempty"`
+    Options map[string]any `json:"options,omitempty"`  // Implementation-specific
+}
+
+// Implementation-specific config EMBEDS base config
+type ImageMagickConfig struct {
+    Config     ImageConfig  // Embedded base configuration
+    Background string       // Implementation-specific field
+    Brightness *int         // Implementation-specific field
+    Contrast   *int         // Implementation-specific field
+}
+
+// Renderer stores single complete configuration
+type imagemagickRenderer struct {
+    settings ImageMagickConfig  // Contains both base + specific
+}
+```
+
+**Transformation Pattern**:
+```go
+func parseImageMagickConfig(cfg config.ImageConfig) (*ImageMagickConfig, error) {
+    imCfg := &ImageMagickConfig{
+        Config:     cfg,      // Embed base config
+        Background: "white",  // Default implementation-specific value
+    }
+
+    // Parse Options map into typed fields
+    if bg, ok := cfg.Options["background"]; ok {
+        bgStr, ok := bg.(string)
+        if !ok {
+            return nil, fmt.Errorf("background must be a string")
+        }
+        imCfg.Background = bgStr
+    }
+
+    // Parse and validate other options...
+
+    return imCfg, nil
+}
+
+func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
+    cfg.Finalize()
+
+    // Validate universal settings
+    if cfg.Format != "png" && cfg.Format != "jpg" {
+        return nil, fmt.Errorf("unsupported format: %s", cfg.Format)
+    }
+
+    // Parse Options into ImageMagickConfig (embeds base + adds specific)
+    imCfg, err := parseImageMagickConfig(cfg)
+    if err != nil {
+        return nil, err
+    }
+
+    return &imagemagickRenderer{
+        settings: *imCfg,  // Single field contains everything
+    }, nil
+}
+```
+
+**Interface Method Implementation**:
+```go
+// Settings() returns embedded base config
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings.Config  // Access embedded base
+}
+
+// Parameters() returns implementation-specific params for cache keys
+func (r *imagemagickRenderer) Parameters() []string {
+    params := []string{
+        fmt.Sprintf("background=%s", r.settings.Background),
+    }
+    if r.settings.Brightness != nil {
+        params = append(params, fmt.Sprintf("brightness=%d", *r.settings.Brightness))
+    }
+    return params
+}
+
+// Render() accesses both base and specific settings
+func (r *imagemagickRenderer) Render(input string, page int, output string) error {
+    // Access base config: r.settings.Config.DPI
+    // Access specific config: r.settings.Background, r.settings.Brightness
+    args := r.buildArgs()
+    // ...
+}
+```
+
+**Benefits**:
+- **Single storage field**: One `settings` field instead of separate `settings` and `options` fields
+- **Natural encapsulation**: ImageMagickConfig is the "complete" configuration for ImageMagick
+- **Cleaner access**: `r.settings.Config.DPI` for universal, `r.settings.Background` for specific
+- **Simple interface methods**: Settings() returns `r.settings.Config`, Parameters() uses `r.settings`
+- **Clear semantics**: Embedded Config = universal, other fields = implementation-specific
+
+**When to Use Enhanced Pattern**:
+- When implementation needs access to both base and specific configuration during operations
+- When configuration is Type 2 (Immutable Runtime Settings) - stored for object lifetime
+- When interface requires both Settings() and Parameters() methods
+- When cleaner encapsulation outweighs slightly increased parsing complexity
+
 ### Package Organization Depth
 **Principle**: Avoid package subdirectories deeper than a single level. Deep nesting often indicates over-engineered abstractions or unclear responsibility boundaries.
 

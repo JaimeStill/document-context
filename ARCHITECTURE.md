@@ -8,7 +8,8 @@ This document describes the current architecture and implementation of the docum
 pkg/
 ├── config/             # Configuration data structures
 │   ├── doc.go          # Package documentation
-│   ├── image.go        # ImageConfig with filter fields
+│   ├── image.go        # ImageConfig and ImageMagickConfig
+│   ├── parse.go        # Options map parsing helpers
 │   ├── cache.go        # CacheConfig structure
 │   └── logger.go       # LoggerConfig structure
 ├── logger/             # Structured logging infrastructure
@@ -48,31 +49,65 @@ The configuration package provides ephemeral data structures for initializing do
 
 #### ImageConfig
 
-Configuration for image rendering operations:
+Base configuration for image rendering operations using the Configuration Composition Pattern:
 
 ```go
 type ImageConfig struct {
-    Format     string `json:"format,omitempty"`      // "png" or "jpg"
-    Quality    int    `json:"quality,omitempty"`     // JPEG quality: 1-100
-    DPI        int    `json:"dpi,omitempty"`         // Render density
-    Brightness *int   `json:"brightness,omitempty"`  // -100 to +100 (Session 5)
-    Contrast   *int   `json:"contrast,omitempty"`    // -100 to +100 (Session 5)
-    Saturation *int   `json:"saturation,omitempty"`  // -100 to +100 (Session 5)
-    Rotation   *int   `json:"rotation,omitempty"`    // 0 to 360 degrees (Session 5)
+    Format  string         `json:"format,omitempty"`  // "png" or "jpg"
+    Quality int            `json:"quality,omitempty"` // JPEG quality: 1-100
+    DPI     int            `json:"dpi,omitempty"`     // Render density
+    Options map[string]any `json:"options,omitempty"` // Implementation-specific options
 }
 ```
 
-**Filter Fields**: Use pointer types (*int) to distinguish "not set" (nil) from "explicitly set to zero" (pointer to 0).
+**Design**: ImageConfig provides universal rendering settings (format, quality, DPI) while Options map contains implementation-specific configuration that is parsed during renderer initialization.
 
 **Configuration Methods**:
-- `DefaultImageConfig()`: Returns PNG, 300 DPI, no filters
-- `Merge(source *ImageConfig)`: Overlays non-zero values from source onto receiver
+- `DefaultImageConfig()`: Returns PNG format, 300 DPI, 0 quality, empty Options map
+- `Merge(source *ImageConfig)`: Overlays non-zero values and copies Options using `maps.Copy()`
 - `Finalize()`: Applies default values for any unset fields by merging onto defaults
 
 **Merge Semantics**:
 - String fields: only merge if non-empty
 - Integer fields: only merge if greater than zero
-- Pointer fields: only merge if non-nil (allows explicit zero via pointer to 0)
+- Options map: merged using `maps.Copy()` (source values override base)
+
+#### ImageMagickConfig
+
+Implementation-specific configuration parsed from ImageConfig.Options:
+
+```go
+type ImageMagickConfig struct {
+    Config     ImageConfig // Embedded base configuration
+    Background string      // Background color for alpha flattening
+    Brightness *int        // 0-200, where 100 is neutral
+    Contrast   *int        // -100 to +100, where 0 is neutral
+    Saturation *int        // 0-200, where 100 is neutral
+    Rotation   *int        // 0-360 degrees clockwise
+}
+```
+
+**Design**: Embeds ImageConfig for unified access to both universal and implementation-specific settings. Filter fields use pointers to distinguish "not set" (nil) from "explicitly set" (non-nil).
+
+**Parsing**: Created via `parseImageMagickConfig()` which extracts and validates Options map entries using parsing helpers (`ParseString`, `ParseNilIntRanged`).
+
+**Configuration Methods**:
+- `DefaultImageMagickConfig()`: Returns default ImageConfig with "white" background and nil filters
+
+#### Configuration Parsing Helpers
+
+Type-safe extraction functions for Options map values:
+
+**ParseString(options, key, fallback)**: Extracts string with fallback support
+- Returns fallback if key absent
+- Validates value is non-empty string
+- Returns error for wrong type or empty string
+
+**ParseNilIntRanged(options, key, low, high)**: Extracts optional integer with range validation
+- Returns nil if key absent (not configured)
+- Handles JSON float64 → int conversion
+- Validates value is within [low, high] range
+- Returns pointer to value if present and valid
 
 #### CacheConfig
 
@@ -474,6 +509,7 @@ type Renderer interface {
     Render(inputPath string, pageNum int, outputPath string) error
     FileExtension() string
     Settings() config.ImageConfig
+    Parameters() []string
 }
 ```
 
@@ -482,49 +518,85 @@ type Renderer interface {
 **Methods**:
 - `Render(inputPath, pageNum, outputPath)`: Converts specified page to image file
 - `FileExtension()`: Returns appropriate file extension for output format (no leading dot)
-- `Settings()`: Returns renderer's immutable configuration (Type 2 Configuration Pattern)
+- `Settings()`: Returns renderer's immutable base configuration (universal settings)
+- `Parameters()`: Returns implementation-specific parameters for cache key generation
 
 **Thread Safety**: Renderer instances are immutable once created and safe for concurrent use.
 
-**Settings Access**: The `Settings()` method exposes the renderer's complete configuration throughout its lifetime. This follows the Type 2 Configuration Pattern (Immutable Runtime Settings), enabling operations like cache key generation that require access to all rendering parameters.
+**Settings and Parameters**: The `Settings()` method exposes the universal configuration (format, DPI, quality) while `Parameters()` provides implementation-specific settings (filters, background, etc.). This separation follows the Configuration Composition Pattern (Enhanced: Embedded Base), enabling complete cache key generation that includes both universal and implementation-specific parameters.
 
 #### ImageMagickRenderer
 
-Implementation using ImageMagick for PDF rendering following the Type 2 Configuration Pattern:
+Implementation using ImageMagick for PDF rendering following the Configuration Composition Pattern (Enhanced: Embedded Base):
 
 ```go
+// ImageMagickConfig embeds base config + adds implementation-specific fields
+type ImageMagickConfig struct {
+    Config     config.ImageConfig  // Embedded base (universal settings)
+    Background string              // ImageMagick-specific
+    Brightness *int                // 0-200, 100=neutral (nil=omit)
+    Contrast   *int                // -100 to +100 (nil=omit)
+    Saturation *int                // 0-200, 100=neutral (nil=omit)
+    Rotation   *int                // 0-360 degrees (nil=omit)
+}
+
 func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
     cfg.Finalize()  // Apply defaults
 
-    // Validate configuration
+    // Validate universal settings
     // - Format must be "png" or "jpg"
     // - JPEG quality 1-100
-    // - Filter ranges: -100 to +100
-    // - Rotation: 0 to 360 degrees
+
+    // Parse Options map into ImageMagickConfig (embeds base + adds specific)
+    imCfg, err := parseImageMagickConfig(cfg)
+    if err != nil {
+        return nil, err
+    }
 
     return &imagemagickRenderer{
-        settings: cfg,  // Store complete configuration
+        settings: *imCfg,  // Single field contains base + specific
     }, nil
 }
 
 func (r *imagemagickRenderer) Settings() config.ImageConfig {
-    return r.settings  // Expose immutable configuration
+    return r.settings.Config  // Return embedded base config
+}
+
+func (r *imagemagickRenderer) Parameters() []string {
+    // Return implementation-specific params for cache keys
+    params := []string{fmt.Sprintf("background=%s", r.settings.Background)}
+    if r.settings.Brightness != nil {
+        params = append(params, fmt.Sprintf("brightness=%d", *r.settings.Brightness))
+    }
+    // ... other optional filters
+    return params
 }
 ```
 
-**Transformation Pattern**: Configuration (data) → Validation → Domain Object (behavior) with Persistent Settings
+**Transformation Pattern**:
+```
+BaseConfig → Parse Options → ImageMagickConfig (embeds base) → Validate → Renderer
+```
 
-**Type 2 Configuration Pattern**: Unlike Type 1 (where configuration is discarded), the renderer stores the complete validated configuration in a `settings` field and exposes it via the `Settings()` method. This enables runtime access to all rendering parameters.
+**Configuration Composition Pattern (Enhanced)**:
+- Base `ImageConfig` contains universal settings (Format, DPI, Quality) + Options map
+- `parseImageMagickConfig()` creates `ImageMagickConfig` that embeds base + adds typed specific fields
+- Renderer stores single `settings ImageMagickConfig` field (contains both base and specific)
+- `Settings()` returns embedded base config for universal access
+- `Parameters()` returns implementation-specific params for cache key generation
 
-**Validation Boundary**: All validation occurs in `NewImageMagickRenderer()`. Invalid configurations are rejected before creating the renderer.
+**Validation Boundary**:
+- Universal settings validated in `NewImageMagickRenderer()`
+- Implementation-specific options parsed and validated in `parseImageMagickConfig()`
+- Invalid configurations rejected before creating renderer
 
 **Implementation Details**:
 - Struct `imagemagickRenderer` is unexported (private)
 - Constructor returns `Renderer` interface (public API)
-- Stores complete `ImageConfig` as `settings` field (immutable after creation)
-- `Settings()` method provides access to configuration throughout renderer lifetime
-- `Render()` method builds ImageMagick command using `settings` values
-- Filter application implementation pending (Session 5)
+- Stores `ImageMagickConfig` as single `settings` field (immutable after creation)
+- Access base via `r.settings.Config`, specific via `r.settings.Background`, etc.
+- `Render()` method builds ImageMagick command with filters applied conditionally
+- Filter ranges use ImageMagick-native values (Brightness/Saturation: 0-200, Contrast: -100 to +100)
 
 **Benefits**:
 - Consumers cannot access implementation-specific methods

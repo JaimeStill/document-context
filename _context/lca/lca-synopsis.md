@@ -169,6 +169,14 @@ The same pattern at every layer means the same mental model from code to cloud. 
 - Works with any instantiation pattern: factories, registries, or dependency injection
 - **Pattern**: `BaseConfig + Options map → Parse → TypedImplConfig → Validate → Behavior`
 
+**Enhanced Pattern: Embedded Base Configuration**
+- Implementation-specific config embeds the base config for cleaner architecture
+- Domain object stores single `settings` field containing both base and specific config
+- Access base config via `settings.Config`, specific fields via `settings.SpecificField`
+- Settings() returns embedded base config, Parameters() returns implementation-specific params
+- **Structure**: `TypedImplConfig { Config BaseConfig; SpecificFields }`
+- **Benefits**: Single storage field, natural encapsulation, cleaner access patterns
+
 ### When Building Libraries
 - Module boundaries should be clear and stable
 - Public APIs should expose interfaces, not concrete types
