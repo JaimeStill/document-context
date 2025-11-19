@@ -276,6 +276,29 @@ Development sessions follow a structured workflow to maintain clarity and enable
 
 **README.md**: User-facing documentation for prerequisites, installation, usage examples, and getting started information.
 
+**CHANGELOG.md**: Version history tracking public API changes only. Documents what's available in each version for library consumers.
+
+### Release Process and CHANGELOG
+
+See [Release Process](./_context/release-process.md) for complete documentation on:
+
+- **Version Numbering Strategy**: Pre-release (v0.x.x), release candidates (v1.0.0-rc.x), and stable releases (v1.0.0+)
+- **Pre-Release Philosophy**: Validation approach and breaking change policy during v0.x.x phase
+- **CHANGELOG Format**: Structure, content guidelines, and version section conventions
+- **Publishing Workflow**: Pre-publication checklist, Go module publishing steps, and verification process
+- **Communication Strategy**: Pre-release transparency, version communication, and feedback channels
+
+**Quick CHANGELOG Guidelines**:
+
+**Include**: New packages/types/functions/methods, interface changes, configuration options, breaking changes, public API behavior fixes
+
+**Exclude**: Implementation details, internal refactoring, documentation updates, test additions, performance improvements (unless API changed)
+
+**Format**:
+- Version heading: `## [vX.Y.Z] - YYYY-MM-DD`
+- Category headings: `**Added**:`, `**Changed**:`, `**Deprecated**:`, `**Removed**:`, `**Fixed**:`
+- Package-level bullets with concise descriptions focusing on what's available
+
 ### Documentation Tone and Style
 
 All documentation should be written in a clear, objective, and factual manner with professional tone. Focus on concrete implementation details and actual outcomes rather than speculative content or unfounded claims.
