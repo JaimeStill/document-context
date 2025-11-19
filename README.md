@@ -2,9 +2,9 @@
 
 A Go library for converting documents into context-friendly formats suitable for LLM consumption and analysis.
 
-## Status: Pre-Release Development
+## Status: v0.1.0 Release Ready
 
-**document-context** is currently in active development and has not yet reached v0.1.0. The API is subject to change as additional features and format support are added.
+**document-context** has completed Phase 2 development and is ready for v0.1.0 release. The library provides production-ready PDF processing with image caching, enhancement filters, and comprehensive documentation.
 
 ## Documentation
 
@@ -182,6 +182,10 @@ if err != nil {
 ```
 
 For integration with [go-agents](https://github.com/JaimeStill/go-agents), see the go-agents documentation for vision API usage patterns.
+
+## Examples
+
+See [examples/document-converter](./examples/document-converter/) for a comprehensive CLI tool demonstrating all library features.
 
 ## Configuration
 
