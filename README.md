@@ -151,18 +151,15 @@ if err != nil {
     return err
 }
 
-// Create renderer and open document (as shown in basic example)
-renderer, _ := image.NewImageMagickRenderer(config.DefaultImageConfig())
-doc, _ := document.OpenPDF("large-document.pdf")
-defer doc.Close()
-
+// Use cache with ToImage()
 page, _ := doc.ExtractPage(1)
-
-// Pass cache to ToImage() - first call renders and caches, subsequent calls return cached result
-imageData, err := page.ToImage(renderer, c)
+imageData, err := page.ToImage(renderer, c)  // First call renders and caches
+cachedData, err := page.ToImage(renderer, c)  // Second call returns cached data
 ```
 
-**Cache Keys**: Generated from document path, page number, and rendering parameters (DPI, quality, filters). Changing any parameter creates a new cache entry.
+Cache keys are generated from document path, page number, and all rendering parameters (format, DPI, quality, filters). The same configuration always produces the same cache key.
+
+For detailed cache behavior, troubleshooting, and advanced usage, see [GUIDE.md](./GUIDE.md#caching)
 
 ### Data URI Encoding for LLM APIs
 

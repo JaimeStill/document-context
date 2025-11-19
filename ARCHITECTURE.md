@@ -871,37 +871,227 @@ func (p *PDFPage) buildCacheKey(settings config.ImageConfig) (string, error) {
 Constructs complete cache entry with metadata:
 
 ```go
-func (p *PDFPage) prepareCache(data []byte, settings config.ImageConfig) (*cache.CacheEntry, error) {
-    key, err := p.buildCacheKey(settings)
+func (p *PDFPage) prepareCache(data []byte, renderer image.Renderer) (*cache.CacheEntry, error) {
+    key, err := p.buildCacheKey(renderer)
     if err != nil {
         return nil, err
     }
 
+    settings := renderer.Settings()
     baseName := filepath.Base(p.doc.path)
     ext := filepath.Ext(baseName)
     nameWithoutExt := strings.TrimSuffix(baseName, ext)
 
     filename := fmt.Sprintf("%s.%d.%s", nameWithoutExt, p.number, settings.Format)
 
-    mimeType := mime.TypeByExtension("." + settings.Format)
-    if mimeType == "" {
-        mimeType = "application/octet-stream"
-    }
-
     return &cache.CacheEntry{
         Key:      key,
         Data:     data,
         Filename: filename,
-        MimeType: mimeType,
     }, nil
 }
 ```
 
 **Filename Construction**: Formatted as `basename.pagenum.ext` (e.g., "document.1.png")
 
-**MIME Type Derivation**: Uses standard library `mime.TypeByExtension()` with fallback to `application/octet-stream`
+**Complete Entry**: Provides all metadata needed for cache storage and retrieval
 
-**Complete Entry**: Provides all metadata needed for HTTP serving or file storage
+### Cache Integration Specification
+
+The document layer integrates persistent caching to avoid redundant PDF page rendering. This section specifies the cache key format, integration flow, and behavior matrix.
+
+#### Cache Key Format
+
+Cache keys uniquely identify rendered images based on all factors affecting the output. The key generation process creates a deterministic string representation of these factors, then hashes it with SHA256 for consistent key length and collision avoidance.
+
+**Pre-Hash Format**:
+```
+/absolute/path/to/document.pdf/1.png?dpi=300&quality=90&background=white&brightness=110
+```
+
+**Components** (in order):
+1. **Document Path**: Absolute path to source PDF (`/absolute/path/to/document.pdf`)
+2. **Page Number**: 1-indexed page number (`/1`)
+3. **Image Format**: Output format extension (`.png` or `.jpg`)
+4. **Query Parameters**: Rendering settings in deterministic alphabetical order
+
+**Mandatory Parameters** (always included):
+- `dpi={value}` - Rendering density (e.g., `dpi=300`)
+- `quality={value}` - JPEG quality or 0 for PNG (e.g., `quality=90`)
+
+**Optional Parameters** (included when non-nil, alphabetically):
+- `background={color}` - Background color for alpha flattening (e.g., `background=white`)
+- `brightness={value}` - Brightness adjustment 0-200 (e.g., `brightness=110`)
+- `contrast={value}` - Contrast adjustment -100 to +100 (e.g., `contrast=-10`)
+- `rotation={degrees}` - Rotation in degrees 0-360 (e.g., `rotation=90`)
+- `saturation={value}` - Saturation adjustment 0-200 (e.g., `saturation=120`)
+
+**Post-Hash Key**: SHA256 hash in hexadecimal format (64 characters):
+```
+a3a6788c43b16d73b83cc01f34ea39e416bf1fcbff5cbaccceb818b1118f06ed
+```
+
+**Key Properties**:
+- **Deterministic**: Same inputs always produce same key
+- **Unique**: Different configurations produce different keys with high probability
+- **Portable**: Absolute paths ensure different machines can share cache if paths match
+- **Complete**: All rendering parameters included to prevent incorrect cache hits
+
+**Parameter Ordering**: Alphabetical ordering of all parameters ensures deterministic key generation regardless of configuration source.
+
+#### Cache Integration Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PDFPage.ToImage(renderer, cache)                            │
+└─────────────────────────────────────────────────────────────┘
+                         │
+                         ├─ cache != nil?
+                         │
+        ┌────────────────┴────────────────┐
+        │ NO                              │ YES
+        │                                 │
+        ▼                                 ▼
+   ┌─────────────┐              ┌──────────────────┐
+   │ Skip Cache  │              │ Generate Cache   │
+   │ Logic       │              │ Key from Renderer│
+   └─────────────┘              └──────────────────┘
+        │                                 │
+        │                                 ▼
+        │                        ┌──────────────────┐
+        │                        │ cache.Get(key)   │
+        │                        └──────────────────┘
+        │                                 │
+        │                ┌────────────────┴───────────────┐
+        │                │ Found?                         │
+        │                │                                │
+        │         ┌──────┴─────┐                    ┌─────┴─────┐
+        │         │ YES        │                    │ NO (Miss) │
+        │         │            │                    │           │
+        │         ▼            ▼                    ▼           │
+        │    ┌─────────┐  ┌────────┐          ┌─────────┐       │
+        │    │ Error?  │  │ Cache  │          │ Error?  │       │
+        │    │         │  │ Hit    │          │         │       │
+        │    └─────────┘  └────────┘          └─────────┘       │
+        │         │            │                    │           │
+        │         │ YES        │ NO                 │ YES       │ NO
+        │         │            │                    │           │
+        │         ▼            ▼                    ▼           ▼
+        │    ┌─────────┐  ┌─────────┐         ┌─────────┐ ┌─────────┐
+        │    │ Return  │  │ Return  │         │ Return  │ │ Continue│
+        │    │ Error   │  │ entry.  │         │ Error   │ │ to      │
+        │    │         │  │ Data    │         │         │ │ Render  │
+        │    └─────────┘  └─────────┘         └─────────┘ └─────────┘
+        │                                                       │
+        └───────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+                    ┌──────────────────────────┐
+                    │ Create Temp File         │
+                    │ renderer.Render(...)     │
+                    │ Read Image Data          │
+                    │ Delete Temp File         │
+                    └──────────────────────────┘
+                                 │
+                                 ├─ cache != nil?
+                                 │
+                    ┌────────────┴────────────┐
+                    │ NO                      │ YES
+                    │                         │
+                    ▼                         ▼
+              ┌───────────┐         ┌──────────────────┐
+              │ Return    │         │ Prepare Cache    │
+              │ Image     │         │ Entry (key,data, │
+              │ Data      │         │ filename)        │
+              └───────────┘         └──────────────────┘
+                                             │
+                                             ▼
+                                    ┌──────────────────┐
+                                    │ cache.Set(entry) │
+                                    └──────────────────┘
+                                             │
+                                ┌────────────┴───────────┐
+                                │ Success?               │
+                                │                        │
+                         ┌──────┴─────┐          ┌───────┴──────┐
+                         │ YES        │          │ NO           │
+                         │            │          │              │
+                         ▼            ▼          ▼              │
+                    ┌─────────┐  ┌─────────┐ ┌─────────┐        │
+                    │ Return  │  │ Return  │ │ Return  │        │
+                    │ Image   │  │ Image   │ │ Error   │        │
+                    │ Data    │  │ Data    │ │         │        │
+                    └─────────┘  └─────────┘ └─────────┘        │
+                                                                │
+                    ┌───────────────────────────────────────────┘
+                    │
+                    ▼
+              ┌───────────┐
+              │   Done    │
+              └───────────┘
+```
+
+**Flow Description**:
+1. **Cache Check Phase** (if cache provided):
+   - Generate cache key from renderer settings and filter parameters
+   - Call `cache.Get(key)` to check for cached image
+   - **Cache Hit**: Return cached data immediately (no rendering)
+   - **Cache Miss**: Continue to rendering phase
+   - **Cache Error**: Propagate error (fail fast on storage failures)
+
+2. **Rendering Phase**:
+   - Create temporary file for rendered output
+   - Call `renderer.Render()` to convert PDF page to image
+   - Read rendered image data from temporary file
+   - Delete temporary file (via defer)
+
+3. **Cache Store Phase** (if cache provided):
+   - Prepare `CacheEntry` with key, data, and filename
+   - Call `cache.Set(entry)` to store rendered image
+   - **Store Success**: Return image data
+   - **Store Error**: Propagate error (fail fast on storage failures)
+
+4. **No Cache Phase** (if cache nil):
+   - Skip all cache operations
+   - Perform rendering only
+   - Return image data directly
+
+#### Caching Behavior Matrix
+
+| Scenario | Cache Param | Cache.Get() | Rendering | Cache.Set() | Result | Notes |
+|----------|-------------|-------------|-----------|-------------|--------|-------|
+| **No Cache** | `nil` | Skipped | Always | Skipped | Image data | Original behavior, no caching overhead |
+| **Cache Hit** | Provided | Success | Never | Skipped | Cached data | Fastest path, no ImageMagick execution |
+| **Cache Miss** | Provided | `ErrCacheEntryNotFound` | Yes | Success | Image data | Normal cache population |
+| **Cache Miss + Set Fail** | Provided | `ErrCacheEntryNotFound` | Yes | Error | Error | Storage failure prevents caching |
+| **Cache Get Error** | Provided | Storage Error | Never | Skipped | Error | Fail fast on cache infrastructure issues |
+| **Cache Set Error** | Provided | `ErrCacheEntryNotFound` | Yes | Error | Error | Fail fast on cache infrastructure issues |
+
+**Error Handling Philosophy**:
+- **Cache Misses**: Expected behavior (`ErrCacheEntryNotFound`), continue to rendering
+- **Storage Failures**: Unexpected errors, propagated immediately (fail fast)
+- **No Graceful Degradation**: Cache errors indicate infrastructure problems that should be surfaced, not hidden
+
+**Performance Implications**:
+- **Cache Hit**: ~1ms (cache retrieval only, no rendering)
+- **Cache Miss**: ~500-1000ms (rendering + cache storage)
+- **No Cache**: ~500ms (rendering only, no cache overhead)
+
+**Concurrency Safety**:
+- **Multiple Renders**: Safe to render same page concurrently in different goroutines
+- **Cache Implementation**: Responsible for thread-safe operations
+- **Filesystem Cache**: Directory-per-key structure enables concurrent access to different keys
+- **Same Key Concurrent Access**: Last write wins (filesystem atomic replace)
+
+**Cache Key Determinism Validation**:
+Tests verify that:
+1. Same configuration produces same cache key (deterministic)
+2. Different document paths produce different keys
+3. Different page numbers produce different keys
+4. Different formats (PNG vs JPEG) produce different keys
+5. Different DPI values produce different keys
+6. Different filter values (brightness, contrast, etc.) produce different keys
+7. Parameters included in alphabetical order regardless of configuration source
 
 ## Image Encoding
 
@@ -1007,10 +1197,11 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 - **Cache Implementation**: Filesystem CRUD operations, corruption detection, directory-per-key structure
 - **Cache Infrastructure**: Key generation (deterministic, format, ordering), entry structure
 - **Cache Configuration**: Options parsing, validation, Configuration Composition Pattern
-- **Image Rendering**: Renderer configuration, Settings() access, ImageMagick integration
-- **PDF Processing**: Document loading, page extraction, bounds checking, cache-aware rendering
+- **Cache Integration** (Session 6): Cache hits, misses, error handling, key determinism, filter integration, concurrency
+- **Image Rendering**: Renderer configuration, Settings() access, Parameters() method, ImageMagick integration with filters
+- **PDF Processing**: Document loading, page extraction, bounds checking, cache-aware rendering with ToImage()
 - **Image Encoding**: Data URI encoding, format validation
-- **Error Handling**: Missing binaries, invalid configurations, cache misses vs errors, cache corruption
+- **Error Handling**: Missing binaries, invalid configurations, cache misses vs errors, cache corruption, cache storage failures
 
 **Test Patterns**:
 - Table-driven tests for multiple scenarios
@@ -1022,13 +1213,16 @@ func TestPDFPage_ToImage_PNG(t *testing.T) {
 - Conditional execution for external binary dependencies
 - Concurrency testing using sync.WaitGroup and error channels
 - Temporary directory isolation using t.TempDir()
+- Mock implementations for controlled cache behavior testing
 
-**Test Statistics** (Session 4):
+**Test Statistics** (Session 6):
 - **Cache Package Coverage**: 87.1%
 - **Config Package Coverage**: 95.3%
+- **Document Package**: 13 cache integration tests + 7 basic operation tests
 - **Registry Tests**: 10 test functions covering registration, creation, listing, concurrency
 - **Filesystem Tests**: 13 test functions covering factory, CRUD, corruption, concurrency
-- **Config Tests**: Updated for Logger.Merge, CacheConfig.Merge, LoggerOutput constants
+- **Cache Integration Tests**: 13 test functions covering hits, misses, determinism, filters, errors, concurrency
+- **All tests pass with -race flag** (no race conditions detected)
 
 ## Extension Points
 
