@@ -24,17 +24,11 @@ func TestDefaultImageConfig(t *testing.T) {
 		t.Errorf("expected DPI 300, got %d", cfg.DPI)
 	}
 
-	if cfg.Brightness != nil {
-		t.Errorf("expected Brightness nil, got %v", *cfg.Brightness)
+	if cfg.Options == nil {
+		t.Error("expected Options map to be initialized")
 	}
-	if cfg.Contrast != nil {
-		t.Errorf("expected Contrast nil, got %v", *cfg.Contrast)
-	}
-	if cfg.Saturation != nil {
-		t.Errorf("expected Saturation nil, got %v", *cfg.Saturation)
-	}
-	if cfg.Rotation != nil {
-		t.Errorf("expected Rotation nil, got %v", *cfg.Rotation)
+	if len(cfg.Options) != 0 {
+		t.Errorf("expected Options map to be empty, got %d entries", len(cfg.Options))
 	}
 }
 
@@ -122,7 +116,7 @@ func TestImageConfig_Merge_BaseFields(t *testing.T) {
 	}
 }
 
-func TestImageConfig_Merge_FilterFields(t *testing.T) {
+func TestImageConfig_Merge_Options(t *testing.T) {
 	tests := []struct {
 		name    string
 		base    config.ImageConfig
@@ -130,62 +124,62 @@ func TestImageConfig_Merge_FilterFields(t *testing.T) {
 		checkFn func(t *testing.T, result config.ImageConfig)
 	}{
 		{
-			name: "merge all filter fields",
+			name: "merge options into empty base",
 			base: config.DefaultImageConfig(),
 			source: config.ImageConfig{
-				Brightness: intPtr(10),
-				Contrast:   intPtr(5),
-				Saturation: intPtr(-10),
-				Rotation:   intPtr(90),
+				Options: map[string]any{
+					"brightness": 10,
+					"contrast":   5,
+				},
 			},
 			checkFn: func(t *testing.T, result config.ImageConfig) {
-				if result.Brightness == nil || *result.Brightness != 10 {
-					t.Errorf("expected Brightness 10, got %v", result.Brightness)
+				if result.Options["brightness"] != 10 {
+					t.Errorf("expected brightness 10, got %v", result.Options["brightness"])
 				}
-				if result.Contrast == nil || *result.Contrast != 5 {
-					t.Errorf("expected Contrast 5, got %v", result.Contrast)
-				}
-				if result.Saturation == nil || *result.Saturation != -10 {
-					t.Errorf("expected Saturation -10, got %v", result.Saturation)
-				}
-				if result.Rotation == nil || *result.Rotation != 90 {
-					t.Errorf("expected Rotation 90, got %v", result.Rotation)
+				if result.Options["contrast"] != 5 {
+					t.Errorf("expected contrast 5, got %v", result.Options["contrast"])
 				}
 			},
 		},
 		{
-			name: "nil source fields ignored",
+			name: "merge options with existing values",
 			base: config.ImageConfig{
-				Brightness: intPtr(20),
-				Contrast:   intPtr(15),
+				Options: map[string]any{
+					"brightness": 20,
+					"saturation": 15,
+				},
 			},
 			source: config.ImageConfig{
-				Brightness: nil,
-				Saturation: intPtr(5),
+				Options: map[string]any{
+					"brightness": 10,
+					"contrast":   5,
+				},
 			},
 			checkFn: func(t *testing.T, result config.ImageConfig) {
-				if result.Brightness == nil || *result.Brightness != 20 {
-					t.Errorf("expected Brightness 20 (unchanged), got %v", result.Brightness)
+				if result.Options["brightness"] != 10 {
+					t.Errorf("expected brightness 10 (overridden), got %v", result.Options["brightness"])
 				}
-				if result.Contrast == nil || *result.Contrast != 15 {
-					t.Errorf("expected Contrast 15 (unchanged), got %v", result.Contrast)
+				if result.Options["contrast"] != 5 {
+					t.Errorf("expected contrast 5, got %v", result.Options["contrast"])
 				}
-				if result.Saturation == nil || *result.Saturation != 5 {
-					t.Errorf("expected Saturation 5, got %v", result.Saturation)
+				if result.Options["saturation"] != 15 {
+					t.Errorf("expected saturation 15 (unchanged), got %v", result.Options["saturation"])
 				}
 			},
 		},
 		{
-			name: "explicit zero overrides",
+			name: "nil source options ignored",
 			base: config.ImageConfig{
-				Brightness: intPtr(20),
+				Options: map[string]any{
+					"brightness": 20,
+				},
 			},
 			source: config.ImageConfig{
-				Brightness: intPtr(0),
+				Options: nil,
 			},
 			checkFn: func(t *testing.T, result config.ImageConfig) {
-				if result.Brightness == nil || *result.Brightness != 0 {
-					t.Errorf("expected Brightness 0 (explicit override), got %v", result.Brightness)
+				if result.Options["brightness"] != 20 {
+					t.Errorf("expected brightness 20 (unchanged), got %v", result.Options["brightness"])
 				}
 			},
 		},
@@ -224,16 +218,20 @@ func TestImageConfig_Finalize(t *testing.T) {
 		{
 			name: "full config unchanged",
 			input: config.ImageConfig{
-				Format:     "jpg",
-				Quality:    90,
-				DPI:        150,
-				Brightness: intPtr(10),
+				Format:  "jpg",
+				Quality: 90,
+				DPI:     150,
+				Options: map[string]any{
+					"brightness": 10,
+				},
 			},
 			expected: config.ImageConfig{
-				Format:     "jpg",
-				Quality:    90,
-				DPI:        150,
-				Brightness: intPtr(10),
+				Format:  "jpg",
+				Quality: 90,
+				DPI:     150,
+				Options: map[string]any{
+					"brightness": 10,
+				},
 			},
 		},
 	}
@@ -252,9 +250,13 @@ func TestImageConfig_Finalize(t *testing.T) {
 				t.Errorf("DPI: expected %d, got %d", tt.expected.DPI, tt.input.DPI)
 			}
 
-			if tt.expected.Brightness != nil {
-				if tt.input.Brightness == nil || *tt.input.Brightness != *tt.expected.Brightness {
-					t.Errorf("Brightness mismatch: expected %v, got %v", tt.expected.Brightness, tt.input.Brightness)
+			if tt.expected.Options != nil {
+				for key, expectedVal := range tt.expected.Options {
+					if gotVal, ok := tt.input.Options[key]; !ok {
+						t.Errorf("Options[%q] missing", key)
+					} else if gotVal != expectedVal {
+						t.Errorf("Options[%q]: expected %v, got %v", key, expectedVal, gotVal)
+					}
 				}
 			}
 		})
@@ -273,26 +275,30 @@ func TestImageConfig_JSON_Marshal(t *testing.T) {
 			expected: `{"format":"png","dpi":300}`,
 		},
 		{
-			name: "full config with filters",
+			name: "full config with options",
 			config: config.ImageConfig{
-				Format:     "jpg",
-				Quality:    90,
-				DPI:        150,
-				Brightness: intPtr(10),
-				Contrast:   intPtr(5),
-				Saturation: intPtr(-10),
-				Rotation:   intPtr(90),
+				Format:  "jpg",
+				Quality: 90,
+				DPI:     150,
+				Options: map[string]any{
+					"brightness": 10,
+					"contrast":   5,
+					"saturation": -10,
+					"rotation":   90,
+				},
 			},
-			expected: `{"format":"jpg","quality":90,"dpi":150,"brightness":10,"contrast":5,"saturation":-10,"rotation":90}`,
+			expected: `{"format":"jpg","quality":90,"dpi":150,"options":{"brightness":10,"contrast":5,"rotation":90,"saturation":-10}}`,
 		},
 		{
-			name: "partial filters",
+			name: "partial options",
 			config: config.ImageConfig{
-				Format:     "png",
-				DPI:        300,
-				Brightness: intPtr(15),
+				Format: "png",
+				DPI:    300,
+				Options: map[string]any{
+					"brightness": 15,
+				},
 			},
-			expected: `{"format":"png","dpi":300,"brightness":15}`,
+			expected: `{"format":"png","dpi":300,"options":{"brightness":15}}`,
 		},
 	}
 
@@ -330,14 +336,14 @@ func TestImageConfig_JSON_Unmarshal(t *testing.T) {
 				if cfg.DPI != 150 {
 					t.Errorf("expected DPI 150, got %d", cfg.DPI)
 				}
-				if cfg.Brightness != nil {
-					t.Errorf("expected Brightness nil, got %v", *cfg.Brightness)
+				if cfg.Options != nil && len(cfg.Options) > 0 {
+					t.Errorf("expected empty Options, got %v", cfg.Options)
 				}
 			},
 		},
 		{
-			name: "with filter fields",
-			json: `{"format":"png","dpi":300,"brightness":10,"rotation":90}`,
+			name: "with options",
+			json: `{"format":"png","dpi":300,"options":{"brightness":10,"rotation":90}}`,
 			checkFn: func(t *testing.T, cfg config.ImageConfig) {
 				if cfg.Format != "png" {
 					t.Errorf("expected Format 'png', got %q", cfg.Format)
@@ -345,14 +351,16 @@ func TestImageConfig_JSON_Unmarshal(t *testing.T) {
 				if cfg.DPI != 300 {
 					t.Errorf("expected DPI 300, got %d", cfg.DPI)
 				}
-				if cfg.Brightness == nil || *cfg.Brightness != 10 {
-					t.Errorf("expected Brightness 10, got %v", cfg.Brightness)
+				if cfg.Options == nil {
+					t.Fatal("expected Options to be set")
 				}
-				if cfg.Rotation == nil || *cfg.Rotation != 90 {
-					t.Errorf("expected Rotation 90, got %v", cfg.Rotation)
+				brightness, ok := cfg.Options["brightness"].(float64)
+				if !ok || brightness != 10 {
+					t.Errorf("expected brightness 10, got %v", cfg.Options["brightness"])
 				}
-				if cfg.Contrast != nil {
-					t.Errorf("expected Contrast nil, got %v", *cfg.Contrast)
+				rotation, ok := cfg.Options["rotation"].(float64)
+				if !ok || rotation != 90 {
+					t.Errorf("expected rotation 90, got %v", cfg.Options["rotation"])
 				}
 			},
 		},
@@ -388,13 +396,15 @@ func TestImageConfig_JSON_Unmarshal(t *testing.T) {
 
 func TestImageConfig_JSON_RoundTrip(t *testing.T) {
 	original := config.ImageConfig{
-		Format:     "jpg",
-		Quality:    90,
-		DPI:        150,
-		Brightness: intPtr(10),
-		Contrast:   intPtr(5),
-		Saturation: intPtr(-10),
-		Rotation:   intPtr(90),
+		Format:  "jpg",
+		Quality: 90,
+		DPI:     150,
+		Options: map[string]any{
+			"brightness": 10,
+			"contrast":   5,
+			"saturation": -10,
+			"rotation":   90,
+		},
 	}
 
 	data, err := json.Marshal(original)
@@ -418,16 +428,25 @@ func TestImageConfig_JSON_RoundTrip(t *testing.T) {
 		t.Errorf("DPI: expected %d, got %d", original.DPI, decoded.DPI)
 	}
 
-	if decoded.Brightness == nil || *decoded.Brightness != *original.Brightness {
-		t.Errorf("Brightness mismatch: expected %v, got %v", original.Brightness, decoded.Brightness)
+	if decoded.Options == nil {
+		t.Fatal("expected Options to be set")
 	}
-	if decoded.Contrast == nil || *decoded.Contrast != *original.Contrast {
-		t.Errorf("Contrast mismatch: expected %v, got %v", original.Contrast, decoded.Contrast)
-	}
-	if decoded.Saturation == nil || *decoded.Saturation != *original.Saturation {
-		t.Errorf("Saturation mismatch: expected %v, got %v", original.Saturation, decoded.Saturation)
-	}
-	if decoded.Rotation == nil || *decoded.Rotation != *original.Rotation {
-		t.Errorf("Rotation mismatch: expected %v, got %v", original.Rotation, decoded.Rotation)
+
+	for key, originalVal := range original.Options {
+		decodedVal, ok := decoded.Options[key]
+		if !ok {
+			t.Errorf("Options[%q] missing in decoded config", key)
+			continue
+		}
+
+		origFloat, origOk := originalVal.(int)
+		decFloat, decOk := decodedVal.(float64)
+		if origOk && decOk {
+			if float64(origFloat) != decFloat {
+				t.Errorf("Options[%q]: expected %v, got %v", key, originalVal, decodedVal)
+			}
+		} else if originalVal != decodedVal {
+			t.Errorf("Options[%q]: expected %v, got %v", key, originalVal, decodedVal)
+		}
 	}
 }

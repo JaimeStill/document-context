@@ -11,6 +11,10 @@ You are authorized to create and modify documentation files to support my develo
 
 Please refer to [README](./README.md), [ARCHITECTURE](./ARCHITECTURE.md), and [PROJECT](./PROJECT.md) for relevant project documentation.
 
+## Architectural Framework
+
+This project follows **Layered Composition Architecture** (LCA), a unified framework for building software systems from packages to platforms. The design principles below focus on Layer 1 (Package) and Layer 2 (Library/Module) patterns. For the complete architectural framework across all 6 composition layers, see [LCA Synopsis](./_context/lca/lca-synopsis.md) for overview or [Layered Composition Architecture](./_context/lca/layered-composition-architecture.md) for comprehensive documentation.
+
 ## Code Design Principles
 
 ### Encapsulation and Data Access
@@ -34,79 +38,25 @@ Please refer to [README](./README.md), [ARCHITECTURE](./ARCHITECTURE.md), and [P
 - Define request/response types before the client methods that return them
 - Order allows verification that concrete types properly implement interfaces before attempting to use them
 
-### Configuration Transformation Pattern
+### Configuration Patterns
+
 **Principle**: Configuration structures are ephemeral data containers that transform into domain objects at package boundaries through finalization, validation, and initialization functions. Configuration is data; domain objects are behavior.
 
-**Rationale**: Separating configuration (data) from domain objects (behavior) creates clean architectural boundaries, enables JSON serialization of settings while maintaining rich runtime behavior, and prevents configuration infrastructure from leaking into business logic. Configuration exists only during initialization; domain objects persist throughout runtime.
+**Pattern Overview**:
+- **Type 1 (Initialization-Only)**: Config discarded after creating domain object (Example: LoggerConfig → Logger interface)
+- **Type 2 (Immutable Runtime Settings)**: Config stored as settings field throughout object lifetime (Example: ImageConfig in ImageMagickRenderer)
+- **Type 3 (Mutable Runtime Settings)**: Config with validated setters and mutex protection (Example: Pool limits, cache sizes)
+- **Composition Pattern**: Base config + Options map for interfaces with multiple implementations (Example: CacheConfig)
+- **Enhanced Composition**: Implementation-specific config embeds base config (Example: ImageMagickConfig embeds ImageConfig)
 
-**Configuration Responsibilities**:
-- Structure definitions with JSON serialization
-- Default value creation via `Default*()` functions
-- Configuration merging via `Merge()` methods
-- Finalization via `Finalize()` method (merges defaults with provided values)
-
-**Configuration Does NOT**:
-- Validate domain-specific values
-- Import domain packages
-- Enforce business rules
-- Contain business logic
-
-**Domain Object Responsibilities**:
-- Validate configuration values during transformation
-- Transform configuration into domain objects via `New*()` functions
-- Encapsulate runtime behavior and business logic
-- Provide interface-based public APIs
-
-**Lifecycle Pattern**:
-```go
-// 1. Load configuration (JSON, code, etc.)
-cfg := config.ImageConfig{Format: "png", DPI: 150}
-
-// 2. Transform to domain object (includes Finalize + Validate)
-renderer, err := image.NewImageMagickRenderer(cfg)
-if err != nil {
-    return fmt.Errorf("invalid configuration: %w", err)
-}
-
-// 3. Use domain object (config is now discarded)
-result, err := renderer.Render(input, output)
-```
-
-**Transformation Function Pattern**:
-```go
-func NewDomainObject(cfg config.DomainConfig) (Interface, error) {
-    // Finalize configuration (merge defaults)
-    cfg.Finalize()
-
-    // Validate configuration values
-    if cfg.Field < minValue || cfg.Field > maxValue {
-        return nil, fmt.Errorf("field must be %d-%d, got %d",
-            minValue, maxValue, cfg.Field)
-    }
-
-    // Transform to domain object
-    return &domainObjectImpl{
-        field: cfg.Field,
-        // Extract and store validated values
-    }, nil
-}
-```
-
-**Finalize Method Pattern**:
-```go
-func (c *DomainConfig) Finalize() {
-    defaults := DefaultDomainConfig()
-    defaults.Merge(c)
-    *c = defaults
-}
-```
-
-**Benefits**:
-- Clear separation: data (config) vs behavior (domain objects)
-- Configuration is ephemeral and doesn't leak into runtime
-- Domain objects are always constructed in a valid state
-- Interface-based APIs prevent exposure of implementation details
-- Enables clean testing through interface mocks
+**Implementation Guidelines**:
+- Configuration defines structure, defaults, merging, and finalization
+- Domain objects validate values and transform config during construction
+- Transformation via `New*()` functions that return interfaces
+- Refer to [Configuration Patterns](./_context/configuration-patterns.md) for:
+  - Type 1/2/3 decision framework and detailed patterns
+  - Composition pattern structures and transformation flows
+  - Complete code examples and codebase references
 
 ### Package Organization Depth
 **Principle**: Avoid package subdirectories deeper than a single level. Deep nesting often indicates over-engineered abstractions or unclear responsibility boundaries.
@@ -122,159 +72,49 @@ func (c *DomainConfig) Finalize() {
 ### Layered Dependency Hierarchy
 **Principle**: Packages form a dependency hierarchy where higher-level packages wrap lower-level interfaces. Each layer optimizes for its own domain concerns and knows nothing about higher-level abstractions.
 
-**Rationale**: Layered dependencies create natural boundaries that enforce separation of concerns, enable library interoperability, and prevent architectural violations. Lower-level packages remain focused and reusable while higher-level packages compose them into application-specific functionality.
+**Rationale**: Layered dependencies create natural boundaries that enforce separation of concerns, enable library interoperability, and prevent architectural violations.
 
 **Hierarchy Characteristics**:
 - **Dependencies flow downward**: Higher-level packages depend on lower-level interfaces
 - **Knowledge flows upward**: Lower-level packages know nothing about higher-level concerns
-- **Domain separation**: Each layer optimizes for its specific domain
+- **Domain separation**: Each layer optimizes for its specific domain (e.g., pkg/image knows bytes→image, not PDFs)
 - **Interface boundaries**: Layers interact exclusively through interfaces
-
-**Example Hierarchy**:
-```
-pkg/document (high-level: document processing)
-    ↓ depends on
-pkg/image (mid-level: image rendering)
-    ↓ depends on
-pkg/config (low-level: configuration data)
-```
-
-**Domain Separation Example**:
-```go
-// pkg/image knows nothing about PDFs or pages
-// It only knows: bytes in → image out
-type Renderer interface {
-    Render(input []byte, format string) ([]byte, error)
-}
-
-// pkg/document uses image.Renderer without knowing implementation
-type PDFPage struct {
-    data     []byte
-    renderer image.Renderer  // Interface, not concrete type
-}
-
-func (p *PDFPage) ToImage() ([]byte, error) {
-    // Document layer prepares input, renderer handles transformation
-    return p.renderer.Render(p.data, "pdf")
-}
-```
 
 **Implementation Guidelines**:
 - Lower-level packages define interfaces for their domain
 - Higher-level packages implement or consume those interfaces
 - Never import higher-level packages from lower-level ones
 - Each package should be usable independently in different contexts
-- Avoid "import cycle" errors by respecting hierarchy
-
-**Benefits**:
-- Maximizes library reusability (image.Renderer usable beyond PDFs)
-- Prevents tight coupling between layers
-- Enables independent testing of each layer
-- Facilitates parallel development across layers
-- Clear architectural boundaries prevent responsibility creep
 
 ### Interface-Based Layer Interconnection
 **Principle**: Layers interconnect exclusively through interfaces. Objects are initialized and stored as their interface representation, with only interface methods forming the public API. Implementation-specific methods are effectively private.
 
-**Rationale**: Interface-based connections provide loose coupling, enable testing through mocks, allow multiple implementations, and create clear contracts between system components. By returning and storing interfaces (not concrete types), implementation details remain hidden and the public API is explicitly defined by the interface contract.
+**Rationale**: Interface-based connections provide loose coupling, enable testing through mocks, allow multiple implementations, and create clear contracts between system components.
 
-**Public API Through Interfaces**:
+**Implementation Pattern**:
 - Constructor functions return interfaces: `func New(cfg Config) (Interface, error)`
 - Structures receive and store dependencies as interfaces
 - Only interface methods are accessible to consumers
 - Implementation-specific methods exist but are inaccessible
-- Runtime configuration adjustments through interface methods only
+- Use dependency injection to provide implementations
 
-**Pattern**:
+**Example**:
 ```go
-// pkg/image/image.go - Interface defines public API
+// Interface defines public API
 type Renderer interface {
     Render(input []byte) ([]byte, error)
-    SetBrightness(value int) error  // Public: part of interface
-    FileExtension() string           // Public: part of interface
-}
-
-// pkg/image/imagemagick.go - Implementation
-type ImageMagickRenderer struct {
-    brightness int
-    command    string
 }
 
 // Constructor returns interface, not concrete type
 func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
-    cfg.Finalize()
-    // validate...
-    return &ImageMagickRenderer{
-        brightness: cfg.Brightness,
-        command:    "magick",
-    }, nil
+    // Returns Renderer interface, hiding ImageMagickRenderer implementation
 }
 
-// Public: interface method
-func (r *ImageMagickRenderer) Render(input []byte) ([]byte, error) {
-    return r.executeCommand(input)
-}
-
-// Public: interface method
-func (r *ImageMagickRenderer) SetBrightness(value int) error {
-    r.brightness = value
-    return nil
-}
-
-// Effectively private: not in interface
-func (r *ImageMagickRenderer) executeCommand(input []byte) ([]byte, error) {
-    // Implementation detail, inaccessible to consumers
-}
-```
-
-**Usage Pattern**:
-```go
-// Consumer code only sees interface
-renderer, err := image.NewImageMagickRenderer(cfg)  // Returns Renderer interface
-if err != nil {
-    return err
-}
-
-// Can call interface methods
-renderer.SetBrightness(10)  // ✓ Available
-result := renderer.Render(data)  // ✓ Available
-
-// Cannot call implementation methods
-renderer.executeCommand(data)  // ✗ Compile error: method not in interface
-```
-
-**Dependency Injection Pattern**:
-```go
-// Higher-level package receives interface dependencies
+// Consumer stores interface dependency
 type PDFDocument struct {
-    path     string
     renderer image.Renderer  // Interface, not *ImageMagickRenderer
 }
-
-func NewPDFDocument(path string, renderer image.Renderer) (*PDFDocument, error) {
-    return &PDFDocument{
-        path:     path,
-        renderer: renderer,  // Any Renderer implementation
-    }, nil
-}
 ```
-
-**Implementation Guidelines**:
-- Define interfaces at package boundaries for all inter-layer communication
-- Higher layers depend on interfaces defined by lower layers
-- Constructor functions always return interfaces, never concrete types
-- Store dependencies as interfaces in structures
-- Use dependency injection to provide implementations
-- Avoid direct instantiation of concrete types from other packages
-- Interface methods = public API; everything else = private
-
-**Benefits**:
-- Explicit public API definition through interfaces
-- Implementation details completely hidden
-- Easy to add new implementations without changing consumers
-- Facilitates testing through interface mocks
-- Prevents accidental coupling to implementation details
-- Clear contract between components
 
 ### Parameter Encapsulation
 **Principle**: If more than two parameters are needed for a function or method, encapsulate the parameters into a structure.
@@ -290,50 +130,18 @@ func NewPDFDocument(path string, renderer image.Renderer) (*PDFDocument, error) 
 ### External Binary Dependencies
 **Principle**: Leverage mature, cross-platform binary tools via `os/exec` rather than reimplementing complex functionality in Go.
 
-**Rationale**: Many document processing and conversion tasks have excellent existing tools (ImageMagick, Tesseract, etc.) that are well-tested, feature-rich, and cross-platform. Reimplementing these tools would be error-prone and time-consuming.
+**Rationale**: Many document processing and conversion tasks have excellent existing tools (ImageMagick, Tesseract, etc.) that are well-tested, feature-rich, and cross-platform.
 
 **Implementation**:
 - Use `os/exec.Command()` to invoke external binaries
-- Always check for binary availability using `exec.LookPath()` before operations
+- Check binary availability using `exec.LookPath()` before operations
 - Provide clear error messages when required binaries are missing
 - Document external dependencies prominently in README
 - Use current command syntax (e.g., `magick` not deprecated `convert`)
 - Clean up temporary files with `defer os.Remove()`
 - Capture both stdout and stderr with `CombinedOutput()` for debugging
 
-**Example**:
-```go
-// Check for binary availability
-if _, err := exec.LookPath("magick"); err != nil {
-    return fmt.Errorf("ImageMagick not installed: %w", err)
-}
-
-// Create temporary file for output
-tmpFile, err := os.CreateTemp("", "output-*.png")
-if err != nil {
-    return err
-}
-tmpPath := tmpFile.Name()
-tmpFile.Close()
-defer os.Remove(tmpPath)
-
-// Execute command with clear arguments
-cmd := exec.Command("magick",
-    "-density", "300",
-    "input.pdf[0]",
-    "-background", "white",
-    "-flatten",
-    tmpPath,
-)
-
-// Capture output for error reporting
-output, err := cmd.CombinedOutput()
-if err != nil {
-    return fmt.Errorf("command failed: %w\nOutput: %s", err, string(output))
-}
-```
-
-### Modern Go Idioms (Go 1.25.2+)
+### Modern Go Idioms (Go 1.25.4+)
 **Principle**: Always engage a subagent to use Context7 MCP to verify code patterns align with the latest Go idioms and standard library best practices when planning code architecture.
 
 **Rationale**: Go evolves with each release, introducing new built-in functions (like `min`/`max` in 1.21), new standard library methods (like `sync.WaitGroup.Go()` in 1.25.0), and refined patterns. Using Context7 ensures implementation guides reflect modern, idiomatic Go code that leverages the latest language features for cleaner, more maintainable implementations.
@@ -346,7 +154,7 @@ if err != nil {
    ```
    Task tool with subagent_type: "general-purpose"
    Prompt: "Review the implementation guide at [path] and verify all code blocks against
-   Go 1.25.2 idioms using Context7 MCP. Retrieve the complete golang/go documentation
+   Go 1.25.4 idioms using Context7 MCP. Retrieve the complete golang/go documentation
    (10,000 tokens) and check for: modern concurrency patterns, proper error handling,
    channel safety, context usage, and new stdlib methods. Return a summary of findings
    with specific line numbers and recommendations."
@@ -359,7 +167,7 @@ if err != nil {
    - context7CompatibleLibraryID: "/golang/go"
    - tokens: 10000
    ```
-   This retrieves the complete Go 1.25.2 standard library documentation covering all packages, patterns, and idioms.
+   This retrieves the complete Go 1.25.4 standard library documentation covering all packages, patterns, and idioms.
 
 3. **Get focused topic documentation** (for specific questions in main conversation):
    ```
@@ -424,26 +232,6 @@ if err != nil {
 - Provide informative skip messages indicating which binary is needed
 - Separate tests into those requiring external tools and those that don't
 
-**Example**:
-```go
-func hasImageMagick() bool {
-    _, err := exec.LookPath("magick")
-    return err == nil
-}
-
-func requireImageMagick(t *testing.T) {
-    t.Helper()
-    if !hasImageMagick() {
-        t.Skip("ImageMagick not installed, skipping test")
-    }
-}
-
-func TestPDFPage_ToImage(t *testing.T) {
-    requireImageMagick(t)
-    // Test implementation requiring ImageMagick
-}
-```
-
 ### Test Naming Conventions
 **Principle**: Test function names clearly describe what is being tested and the scenario.
 
@@ -461,125 +249,22 @@ func TestPDFPage_ToImage(t *testing.T) {
 
 ## Development Session Workflow
 
-### Session Planning and Execution
+Development sessions follow a structured workflow to maintain clarity and enable independent implementation with guidance. Refer to [Development Process](./_context/development-process.md) for complete details on:
 
-Development sessions follow a structured workflow to maintain clarity and enable the developer to execute implementations independently with guidance.
+**Session Planning and Execution**:
+- Planning Phase: Collaborative discussion to explore implementation approaches and align on architectural decisions
+- Plan Presentation: Present implementation guide outline for approval
+- Implementation Guide Creation: Detailed step-by-step guides stored in `_context/##-[guide-title].md`
+- Developer Execution: Developer implements code structure following the guide
+- Validation Phase: Test execution, coverage verification, adherence to design principles
+- Documentation Phase: AI assistant adds code comments, documentation strings, and updates project documentation
+- Session Closeout: Create session summary in `_context/sessions/` and remove temporary implementation guide
 
-**Workflow Steps**:
-1. **Planning Phase**: Discuss implementation approach and align on architectural decisions
-2. **Plan Presentation**: Present concise execution plan describing what will be implemented
-3. **Plan Approval**: Developer approves or requests modifications to the plan
-4. **Implementation Guide Creation**: Create detailed step-by-step implementation guide
-5. **Developer Execution**: Developer implements code following the guide
-6. **Validation Phase**: Validate implementation, run tests, verify correctness
-7. **Documentation Phase**: Update documentation to reflect implemented features
-8. **Session Summary**: Create summary of what was accomplished
-
-### Implementation Guides
-
-**Purpose**: Provide comprehensive step-by-step instructions for code implementation that the developer executes independently.
-
-**Storage Location**: `_context/##-[guide-title].md`
-- Numbered sequentially (01, 02, 03, etc.)
-- Descriptive title reflecting session goal
-- Example: `_context/01-configuration-foundation.md`
-
-**Content Guidelines**:
-- Pure implementation steps only
-- NO code comments or documentation strings (developer adds these)
-- NO testing instructions (handled in validation phase)
-- NO documentation updates (handled in documentation phase)
-- Focus on: what to create, what to change, exact code structure
-- Include: file paths, function signatures, struct definitions, logic flow
-- Organize by task breakdown with clear goals
-
-**Structure**:
-```markdown
-# Session Title
-
-## Overview
-Brief description of what will be implemented
-
-## Task Breakdown
-### Task 1: [Name]
-1. Create file X at path Y
-2. Define struct Z with fields A, B, C
-3. Implement method M with logic...
-
-### Task 2: [Name]
-...
-```
-
-**Lifecycle**: Implementation guides are temporary working documents removed after session completion. They are replaced by session summaries that document what was accomplished.
-
-### Session Summaries
-
-**Purpose**: Document completed development sessions for future reference and project history.
-
-**Storage Location**: `_context/sessions/##-[summary-title].md`
-- Numbered to match implementation guide
-- Created AFTER session completion
-- Permanent documentation
-- Example: `_context/sessions/01-configuration-foundation.md`
-
-**Content**:
-- What was implemented
-- Key architectural decisions made
-- Challenges encountered and solutions
-- Test coverage achieved
-- Documentation updates made
-- Links to relevant commits
-
-**Lifecycle**: Permanent documentation maintained throughout project lifetime.
-
-### Plan Mode Protocol
-
-When in plan mode, follow this protocol:
-
-1. **Do NOT create implementation guides yet**
-2. **Present execution plan** via ExitPlanMode tool with concise summary:
-   - What will be implemented
-   - Core architectural decisions
-   - Major tasks (high-level only)
-   - Expected deliverables
-3. **Wait for approval** from developer
-4. **After approval**, create detailed implementation guide
-5. **Never make code changes** while in plan mode
-
-**Plan Presentation Format**:
-- Brief overview (2-3 sentences)
-- Core components to be created
-- Key architectural decisions
-- Major integration points
-- Estimated complexity
-
-### Validation Phase
-
-After developer completes implementation, perform validation:
-
-**Verification Steps**:
-1. Review code structure matches implementation guide
-2. Run all tests (`go test ./...`)
-3. Check test coverage (`go test ./... -cover`)
-4. Verify code builds (`go build ./...`)
-5. Review error handling patterns
-6. Check adherence to design principles
-7. Validate package documentation
-
-**Outcome**: Report findings, suggest improvements, confirm completion criteria met.
-
-### Documentation Phase
-
-After successful validation, update project documentation:
-
-**Documentation Updates**:
-1. Update ARCHITECTURE.md with new components, interfaces, patterns
-2. Update PROJECT.md with completed checklist items
-3. Update README.md if user-facing changes exist
-4. Create/update code documentation (doc.go, struct comments, method comments)
-5. Create session summary in `_context/sessions/`
-
-**Principle**: Documentation happens AFTER implementation and validation, not during.
+**Key Principles**:
+- Planning phase is collaborative exploration, not one-shot plan presentation
+- Implementation guides contain only code structure; AI assistant adds comments/documentation after validation
+- Documentation happens AFTER implementation and validation, not during
+- Implementation guides are temporary scaffolding; session summaries are permanent documentation
 
 ## Documentation Standards
 

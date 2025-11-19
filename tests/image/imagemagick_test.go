@@ -38,13 +38,15 @@ func TestNewImageMagickRenderer_ValidConfig(t *testing.T) {
 			config: config.ImageConfig{},
 		},
 		{
-			name: "config with valid filters",
+			name: "config with valid options",
 			config: config.ImageConfig{
-				Format:     "png",
-				Brightness: intPtr(10),
-				Contrast:   intPtr(-5),
-				Saturation: intPtr(15),
-				Rotation:   intPtr(90),
+				Format: "png",
+				Options: map[string]any{
+					"brightness": 10,
+					"contrast":   -5,
+					"saturation": 15,
+					"rotation":   90,
+				},
 			},
 		},
 	}
@@ -126,7 +128,7 @@ func TestNewImageMagickRenderer_InvalidQuality(t *testing.T) {
 	}
 }
 
-func TestNewImageMagickRenderer_InvalidFilters(t *testing.T) {
+func TestNewImageMagickRenderer_InvalidOptions(t *testing.T) {
 	tests := []struct {
 		name   string
 		config config.ImageConfig
@@ -135,64 +137,80 @@ func TestNewImageMagickRenderer_InvalidFilters(t *testing.T) {
 		{
 			name: "brightness too low",
 			config: config.ImageConfig{
-				Format:     "png",
-				Brightness: intPtr(-101),
+				Format: "png",
+				Options: map[string]any{
+					"brightness": -1,
+				},
 			},
 			errMsg: "brightness",
 		},
 		{
 			name: "brightness too high",
 			config: config.ImageConfig{
-				Format:     "png",
-				Brightness: intPtr(101),
+				Format: "png",
+				Options: map[string]any{
+					"brightness": 201,
+				},
 			},
 			errMsg: "brightness",
 		},
 		{
 			name: "contrast too low",
 			config: config.ImageConfig{
-				Format:   "png",
-				Contrast: intPtr(-101),
+				Format: "png",
+				Options: map[string]any{
+					"contrast": -101,
+				},
 			},
 			errMsg: "contrast",
 		},
 		{
 			name: "contrast too high",
 			config: config.ImageConfig{
-				Format:   "png",
-				Contrast: intPtr(101),
+				Format: "png",
+				Options: map[string]any{
+					"contrast": 101,
+				},
 			},
 			errMsg: "contrast",
 		},
 		{
 			name: "saturation too low",
 			config: config.ImageConfig{
-				Format:     "png",
-				Saturation: intPtr(-101),
+				Format: "png",
+				Options: map[string]any{
+					"saturation": -1,
+				},
 			},
 			errMsg: "saturation",
 		},
 		{
 			name: "saturation too high",
 			config: config.ImageConfig{
-				Format:     "png",
-				Saturation: intPtr(101),
+				Format: "png",
+				Options: map[string]any{
+					"saturation": 201,
+				},
 			},
 			errMsg: "saturation",
 		},
 		{
 			name: "rotation negative",
 			config: config.ImageConfig{
-				Format:   "png",
-				Rotation: intPtr(-1),
+				Format: "png",
+				Options: map[string]any{
+					"rotation": -1,
+				},
 			},
 			errMsg: "rotation",
 		},
 		{
 			name: "rotation too high",
 			config: config.ImageConfig{
-				Format:   "png",
-				Rotation: intPtr(361),
+				Format: "png",
+				Options: map[string]any{
+					"rotation": 361,
+				},
 			},
 			errMsg: "rotation",
 		},
@@ -202,7 +220,7 @@ func TestNewImageMagickRenderer_InvalidFilters(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := image.NewImageMagickRenderer(tt.config)
 			if err == nil {
-				t.Error("expected error for invalid filter value")
+				t.Error("expected error for invalid option value")
 			}
 		})
 	}
@@ -283,6 +301,77 @@ func TestRenderer_Interface(t *testing.T) {
 	}
 }
 
+func TestRenderer_Settings(t *testing.T) {
+	cfg := config.ImageConfig{
+		Format:  "png",
+		DPI:     300,
+		Quality: 90,
+		Options: map[string]any{
+			"brightness": 10,
+			"contrast":   -5,
+			"saturation": 15,
+			"rotation":   90,
+		},
+	}
+
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	settings := renderer.Settings()
+
+	if settings.Format != cfg.Format {
+		t.Errorf("expected format %q, got %q", cfg.Format, settings.Format)
+	}
+
+	if settings.DPI != cfg.DPI {
+		t.Errorf("expected DPI %d, got %d", cfg.DPI, settings.DPI)
+	}
+
+	if settings.Quality != cfg.Quality {
+		t.Errorf("expected quality %d, got %d", cfg.Quality, settings.Quality)
+	}
+}
+
+func TestRenderer_Parameters(t *testing.T) {
+	cfg := config.ImageConfig{
+		Format: "png",
+		Options: map[string]any{
+			"brightness": 10,
+			"contrast":   -5,
+			"saturation": 15,
+			"rotation":   90,
+			"background": "white",
+		},
+	}
+
+	renderer, err := image.NewImageMagickRenderer(cfg)
+	if err != nil {
+		t.Fatalf("NewImageMagickRenderer failed: %v", err)
+	}
+
+	params := renderer.Parameters()
+
+	expectedParams := map[string]bool{
+		"background=white": true,
+		"brightness=10":    true,
+		"contrast=-5":      true,
+		"rotation=90":      true,
+		"saturation=15":    true,
+	}
+
+	if len(params) != len(expectedParams) {
+		t.Errorf("expected %d parameters, got %d: %v", len(expectedParams), len(params), params)
+	}
+
+	for _, param := range params {
+		if !expectedParams[param] {
+			t.Errorf("unexpected parameter: %q", param)
+		}
+	}
+}
+
 func TestRenderer_BoundaryValues(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -291,43 +380,73 @@ func TestRenderer_BoundaryValues(t *testing.T) {
 		{
 			name: "minimum valid brightness",
 			config: config.ImageConfig{
-				Format:     "png",
-				Brightness: intPtr(-100),
+				Format: "png",
+				Options: map[string]any{
+					"brightness": 0,
+				},
 			},
 		},
 		{
 			name: "maximum valid brightness",
 			config: config.ImageConfig{
-				Format:     "png",
-				Brightness: intPtr(100),
+				Format: "png",
+				Options: map[string]any{
+					"brightness": 200,
+				},
 			},
 		},
 		{
 			name: "minimum valid contrast",
 			config: config.ImageConfig{
-				Format:   "png",
-				Contrast: intPtr(-100),
+				Format: "png",
+				Options: map[string]any{
+					"contrast": -100,
+				},
 			},
 		},
 		{
 			name: "maximum valid contrast",
 			config: config.ImageConfig{
-				Format:   "png",
-				Contrast: intPtr(100),
+				Format: "png",
+				Options: map[string]any{
+					"contrast": 100,
+				},
+			},
+		},
+		{
+			name: "minimum valid saturation",
+			config: config.ImageConfig{
+				Format: "png",
+				Options: map[string]any{
+					"saturation": 0,
+				},
+			},
+		},
+		{
+			name: "maximum valid saturation",
+			config: config.ImageConfig{
+				Format: "png",
+				Options: map[string]any{
+					"saturation": 200,
+				},
 			},
 		},
 		{
 			name: "minimum valid rotation",
 			config: config.ImageConfig{
-				Format:   "png",
-				Rotation: intPtr(0),
+				Format: "png",
+				Options: map[string]any{
+					"rotation": 0,
+				},
 			},
 		},
 		{
 			name: "maximum valid rotation",
 			config: config.ImageConfig{
-				Format:   "png",
-				Rotation: intPtr(360),
+				Format: "png",
+				Options: map[string]any{
+					"rotation": 360,
+				},
 			},
 		},
 		{

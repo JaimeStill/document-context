@@ -4,6 +4,8 @@
 
 This document describes **Layered Composition Architecture** (LCA), a comprehensive architectural philosophy for building robust, maintainable software systems through consistent application of boundary-driven design patterns across all composition layers - from individual packages to cloud platforms.
 
+**New to LCA?** Start with the [LCA Synopsis](./lca-synopsis.md) for a 10-15 minute overview before diving into this comprehensive documentation.
+
 **Core Principle**: At every composition layer, data structures (configurations, specifications, manifests) are ephemeral containers that transform into domain objects (behavior, runtime instances, active systems) at explicit boundaries through validation and initialization. All interactions happen through well-defined interfaces, ensuring clear contracts and hidden implementation details.
 
 **The Composition Stack**: Modern software systems compose through six distinct layers, each with natural boundaries and transformation points:
@@ -94,7 +96,53 @@ Data (Config/Request) → Finalize → Validate → Transform → Behavior (Doma
 
 ## Configuration Transformation Pattern
 
-### Pattern Structure
+### Configuration Types
+
+Configuration serves three distinct purposes at the package layer, each with different lifecycle and persistence characteristics:
+
+**Type 1: Initialization-Only Configuration**
+- Configuration transforms into domain objects and is discarded after initialization
+- Domain object stores resolved objects/interfaces, not the configuration itself
+- Configuration exists only during initialization; domain objects persist throughout runtime
+- Common pattern: String identifiers resolve to interface implementations
+- Example: Observer name → observer interface, renderer name → renderer interface
+
+**Type 2: Immutable Runtime Settings**
+- Configuration represents runtime settings that remain constant after initialization
+- Domain object stores the configuration structure directly as settings (no field extraction/duplication)
+- Settings persist for the lifetime of the domain object, immutable after construction
+- Access via `Settings()` method returning the stored settings
+- Common pattern: Settings needed for operations throughout object lifetime
+- Example: ImageConfig stored as `settings` field in ImageMagickRenderer (format, DPI, quality for cache keys)
+
+**Type 3: Mutable Runtime Settings**
+- Configuration represents runtime settings that can be adjusted during execution
+- Domain object stores configuration privately with controlled mutation through setters
+- Setters validate changes and maintain thread safety (typically with mutex protection)
+- Access via getter/setter methods with validation at each mutation point
+- Common pattern: Operational parameters that need runtime tuning
+- Example: Connection pool limits, cache size adjustments, performance tuning parameters
+
+**Decision Framework**:
+
+Use **Type 1** when:
+- Configuration resolves to objects or interfaces that provide behavior
+- The configuration data itself has no runtime value after initialization
+- Example: String identifiers that resolve to interface implementations
+
+Use **Type 2** when:
+- Configuration represents immutable settings needed throughout object lifetime
+- Settings must be accessible for operations (cache key generation, serialization)
+- No runtime mutation is required
+- Example: Image rendering settings, format conversion parameters
+
+Use **Type 3** when:
+- Settings must be adjustable during runtime (resize limits, tune parameters)
+- Changes require validation to maintain system invariants
+- Thread safety is required for concurrent access to settings
+- Example: Resource pool limits, rate limiting thresholds, cache size bounds
+
+### Pattern Structure (Type 1: Initialization-Only)
 
 ```go
 // 1. Configuration Structure (Data)
@@ -165,7 +213,7 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 }
 ```
 
-### Lifecycle Flow
+### Type 1 Lifecycle Flow (Initialization-Only)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -187,19 +235,20 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 │    - Calls cfg.Finalize() internally                            │
 │    - Validates all fields                                       │
 │    - Returns interface, not concrete type                       │
+│    - Configuration discarded after extraction                   │
 └────────────────────────┬────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. Use Domain Object (Config Discarded)                         │
 │    result, err := obj.Execute()                                 │
 │    - Configuration no longer exists                             │
-│    - Only domain object with behavior                           │
+│    - Only domain object with extracted values/interfaces        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Characteristics
 
-**Configuration (Data)**:
+**Configuration (Data)** - All Types:
 - Serializable structures
 - Default value functions
 - Merge logic for composition
@@ -208,13 +257,294 @@ func NewDomainObject(cfg DomainConfig) (DomainInterface, error) {
 - **No business logic**
 - **No domain knowledge**
 
-**Domain Object (Behavior)**:
+**Domain Object (Behavior)** - Type 1 (Initialization-Only):
 - Created through transformation function
 - Validated during construction
 - Always in valid state
 - Encapsulates business logic
 - Interacts through interfaces
 - **Configuration discarded after creation**
+- Stores extracted values or resolved interfaces
+
+**Domain Object (Behavior)** - Type 2 (Immutable Runtime Settings):
+- Created through transformation function with validation
+- Stores entire configuration structure as `settings` field (no field extraction)
+- Settings accessible via `Settings()` method
+- Settings immutable after construction
+- Settings used throughout object lifetime
+- Example: `renderer.Settings()` returns ImageConfig for cache keys
+
+**Domain Object (Behavior)** - Type 3 (Mutable Runtime Settings):
+- Created through transformation function with initial validation
+- Stores configuration as private `settings` field (not exposed directly)
+- Mutation through validated setter methods
+- Thread-safe access with mutex protection
+- Maintains invariants at each mutation point
+- Example: `pool.SetMaxConnections(n)` validates before updating `settings.MaxConnections`
+
+---
+
+## Configuration Composition Pattern
+
+### When Multiple Implementations Need Different Configuration
+
+**Problem**: An interface has multiple implementations with divergent configuration requirements. Some settings are universal (shared across all implementations), while others are implementation-specific.
+
+**Solution**: Base configuration with universal fields + Options map for implementation-specific settings. Implementation-specific typed config parses and validates the Options map.
+
+### Base Pattern Structure
+
+```go
+// Base configuration - universal settings + Options map
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`   // Universal
+    DPI     int            `json:"dpi,omitempty"`      // Universal
+    Quality int            `json:"quality,omitempty"`  // Universal
+    Options map[string]any `json:"options,omitempty"`  // Implementation-specific
+}
+
+// Implementation-specific typed configuration
+type FilesystemCacheConfig struct {
+    Directory string  // Specific to filesystem implementation
+}
+
+// Parsing function: Options map → Typed config
+func parseFilesystemConfig(options map[string]any) (*FilesystemCacheConfig, error) {
+    dir, ok := options["directory"].(string)
+    if !ok {
+        return nil, fmt.Errorf("directory must be a string")
+    }
+
+    return &FilesystemCacheConfig{
+        Directory: dir,
+    }, nil
+}
+```
+
+### Enhanced Pattern: Embedded Base Configuration
+
+**Refinement**: Implementation-specific config embeds the base config, creating a single "fully realized" configuration containing both universal and specific settings.
+
+**Structure**:
+```go
+// Base configuration (universal settings)
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`
+    DPI     int            `json:"dpi,omitempty"`
+    Quality int            `json:"quality,omitempty"`
+    Options map[string]any `json:"options,omitempty"`
+}
+
+// Implementation-specific config EMBEDS base
+type ImageMagickConfig struct {
+    Config     ImageConfig  // Embedded base configuration
+    Background string       // ImageMagick-specific
+    Brightness *int         // ImageMagick-specific (nil = omit)
+    Contrast   *int         // ImageMagick-specific (nil = omit)
+}
+
+// Domain object stores single complete configuration
+type imagemagickRenderer struct {
+    settings ImageMagickConfig  // Contains both base + specific
+}
+```
+
+### Transformation Flow
+
+```
+JSON/File Configuration
+    ↓ (unmarshal)
+BaseConfig (ImageConfig with Options map)
+    ↓ (parse + validate)
+Implementation Config (ImageMagickConfig with embedded base)
+    ↓ (construct)
+Domain Object (imagemagickRenderer with settings)
+```
+
+### Implementation Pattern
+
+```go
+// Parse function embeds base and adds specific fields
+func parseImageMagickConfig(cfg config.ImageConfig) (*ImageMagickConfig, error) {
+    imCfg := &ImageMagickConfig{
+        Config:     cfg,      // Embed base config
+        Background: "white",  // Default implementation-specific
+    }
+
+    // Parse Options map into typed fields
+    if bg, ok := cfg.Options["background"]; ok {
+        bgStr, ok := bg.(string)
+        if !ok {
+            return nil, fmt.Errorf("background must be a string")
+        }
+        if bgStr == "" {
+            return nil, fmt.Errorf("background cannot be empty")
+        }
+        imCfg.Background = bgStr
+    }
+
+    if b, ok := cfg.Options["brightness"]; ok {
+        brightness, ok := b.(int)
+        if !ok {
+            return nil, fmt.Errorf("brightness must be an integer")
+        }
+        if brightness < 0 || brightness > 200 {
+            return nil, fmt.Errorf("brightness must be 0-200")
+        }
+        imCfg.Brightness = &brightness
+    }
+
+    // Validate and parse other options...
+
+    return imCfg, nil
+}
+
+// Constructor creates domain object with complete config
+func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
+    cfg.Finalize()  // Merge defaults
+
+    // Validate universal settings
+    if cfg.Format != "png" && cfg.Format != "jpg" {
+        return nil, fmt.Errorf("unsupported format: %s", cfg.Format)
+    }
+
+    // Parse Options into implementation config (embeds base)
+    imCfg, err := parseImageMagickConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("invalid ImageMagick options: %w", err)
+    }
+
+    return &imagemagickRenderer{
+        settings: *imCfg,  // Single field contains everything
+    }, nil
+}
+```
+
+### Interface Method Implementation
+
+```go
+// Settings() returns embedded base config
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings.Config  // Access embedded base
+}
+
+// Parameters() returns implementation-specific params
+func (r *imagemagickRenderer) Parameters() []string {
+    params := []string{
+        fmt.Sprintf("background=%s", r.settings.Background),
+    }
+    if r.settings.Brightness != nil {
+        params = append(params, fmt.Sprintf("brightness=%d", *r.settings.Brightness))
+    }
+    return params
+}
+
+// Render() accesses both base and specific settings
+func (r *imagemagickRenderer) Render(input string, page int, output string) error {
+    // Access base: r.settings.Config.DPI
+    // Access specific: r.settings.Background, r.settings.Brightness
+    args := r.buildArgs()
+    // ...
+}
+```
+
+### Key Characteristics
+
+**Base Configuration**:
+- Contains universal settings shared across all implementations
+- Contains Options map for flexibility
+- JSON-serializable for file-based configuration
+- Independent of any specific implementation
+
+**Options Map**:
+- Flexible container: `map[string]any`
+- Accommodates varying implementation requirements
+- Validated during parsing (type assertions + business rules)
+- Fails fast with clear error messages
+
+**Implementation-Specific Config**:
+- Embeds base configuration
+- Adds typed fields specific to implementation
+- Created by parsing Options map
+- Represents "fully realized" configuration
+
+**Domain Object Storage**:
+- Stores single `settings` field (implementation-specific config)
+- Access base via `settings.Config`
+- Access specific via `settings.SpecificField`
+- Natural encapsulation of complete configuration
+
+### Benefits
+
+**Enhanced Pattern Benefits**:
+- **Single storage field**: One `settings` instead of separate `settings` + `options`
+- **Natural encapsulation**: Implementation config is complete configuration
+- **Cleaner access patterns**: `r.settings.Config.DPI` for base, `r.settings.Background` for specific
+- **Simple interface methods**: `Settings()` returns `r.settings.Config`
+- **Clear semantics**: Embedded Config = universal, other fields = specific
+
+**General Pattern Benefits**:
+- **JSON-serializable**: File-based and API-based configuration
+- **Type safety**: After Options map → typed struct transformation
+- **Extensible**: New implementations don't require base config changes
+- **Independent evolution**: Implementation configs evolve separately
+- **Clear errors**: Type validation during parsing, business validation after
+- **Shared dependencies**: Universal fields initialize common dependencies
+
+### When to Use
+
+**Use Configuration Composition Pattern when**:
+- Defining interface with multiple implementations
+- Implementations have different configuration requirements
+- Need JSON-serializable configuration
+- Shared dependencies across implementations
+- Implementation-specific configuration varies significantly
+
+**Use Enhanced Pattern (Embedded Base) when**:
+- Implementation needs both base and specific config during operations
+- Configuration is Type 2 (Immutable Runtime Settings)
+- Interface requires Settings() and Parameters() methods
+- Cleaner encapsulation outweighs slightly increased parsing complexity
+
+### Real-World Examples
+
+**Cache Interface** (Base Pattern):
+```go
+type CacheConfig struct {
+    Logger  LoggerConfig   `json:"logger"`   // Common dependency
+    Options map[string]any `json:"options"`  // Implementation-specific
+}
+
+type FilesystemCacheConfig struct {
+    Directory string
+}
+
+func NewFilesystem(c *config.CacheConfig) (Cache, error) {
+    // Parse Options → FilesystemCacheConfig
+    // Initialize logger from CacheConfig.Logger
+    // Create FilesystemCache with parsed config + logger
+}
+```
+
+**Renderer Interface** (Enhanced Pattern):
+```go
+type ImageConfig struct {
+    Format  string         `json:"format,omitempty"`
+    DPI     int            `json:"dpi,omitempty"`
+    Options map[string]any `json:"options,omitempty"`
+}
+
+type ImageMagickConfig struct {
+    Config     ImageConfig  // Embedded base
+    Background string
+    Brightness *int
+}
+
+func NewImageMagickRenderer(cfg ImageConfig) (Renderer, error) {
+    // Parse into ImageMagickConfig (embeds base + adds specific)
+    // Store single settings field
+}
+```
 
 ---
 
@@ -591,18 +921,13 @@ import "yourproject/pkg/config"
 // Interface defines public API
 type Renderer interface {
     Render(input []byte, inputFormat string) ([]byte, error)
-    SetBrightness(value int) error
-    SetContrast(value int) error
     FileExtension() string
+    Settings() config.ImageConfig  // Type 2: Expose settings for operations like cache keys
 }
 
-// Implementation
+// Implementation - Type 2: Store settings directly
 type imagemagickRenderer struct {
-    format     string
-    quality    int
-    dpi        int
-    brightness int
-    contrast   int
+    settings config.ImageConfig  // Immutable runtime settings
 }
 
 // Constructor returns interface
@@ -618,30 +943,27 @@ func NewImageMagickRenderer(cfg config.ImageConfig) (Renderer, error) {
         return nil, fmt.Errorf("DPI must be 72-600, got %d", cfg.DPI)
     }
 
-    brightness := 0
-    if cfg.Brightness != nil {
-        if *cfg.Brightness < -100 || *cfg.Brightness > 100 {
-            return nil, fmt.Errorf("brightness must be -100 to +100")
-        }
-        brightness = *cfg.Brightness
+    if cfg.Quality < 1 || cfg.Quality > 100 {
+        return nil, fmt.Errorf("quality must be 1-100, got %d", cfg.Quality)
     }
 
-    contrast := 0
-    if cfg.Contrast != nil {
-        if *cfg.Contrast < -100 || *cfg.Contrast > 100 {
-            return nil, fmt.Errorf("contrast must be -100 to +100")
-        }
-        contrast = *cfg.Contrast
+    if cfg.Brightness != nil && (*cfg.Brightness < -100 || *cfg.Brightness > 100) {
+        return nil, fmt.Errorf("brightness must be -100 to +100")
     }
 
-    // Transform to domain object
+    if cfg.Contrast != nil && (*cfg.Contrast < -100 || *cfg.Contrast > 100) {
+        return nil, fmt.Errorf("contrast must be -100 to +100")
+    }
+
+    // Store config as settings - Type 2 pattern
     return &imagemagickRenderer{
-        format:     cfg.Format,
-        quality:    cfg.Quality,
-        dpi:        cfg.DPI,
-        brightness: brightness,
-        contrast:   contrast,
+        settings: cfg,  // No field extraction/duplication
     }, nil
+}
+
+// Type 2: Expose settings for operations throughout lifetime
+func (r *imagemagickRenderer) Settings() config.ImageConfig {
+    return r.settings
 }
 
 func (r *imagemagickRenderer) Render(input []byte, inputFormat string) ([]byte, error) {
@@ -649,25 +971,87 @@ func (r *imagemagickRenderer) Render(input []byte, inputFormat string) ([]byte, 
     return r.execute(input, args)
 }
 
-func (r *imagemagickRenderer) SetBrightness(value int) error {
-    if value < -100 || value > 100 {
-        return fmt.Errorf("brightness must be -100 to +100")
-    }
-    r.brightness = value
-    return nil
-}
-
 func (r *imagemagickRenderer) FileExtension() string {
-    return r.format
+    return r.settings.Format  // Access from stored settings
 }
 
 // Private methods
 func (r *imagemagickRenderer) buildArgs(inputFormat string) []string {
-    // Implementation detail
+    // Use r.settings.DPI, r.settings.Format, r.settings.Brightness, etc.
 }
 
 func (r *imagemagickRenderer) execute(input []byte, args []string) ([]byte, error) {
     // Implementation detail
+}
+```
+
+**Type 3 Example: Mutable Runtime Settings**
+
+```go
+// Type 3: Configuration with mutable runtime settings
+type ConnectionPool struct {
+    mutex    sync.RWMutex
+    settings config.PoolConfig  // Private, mutable through setters
+    conns    []*Connection
+}
+
+func NewConnectionPool(cfg config.PoolConfig) (*ConnectionPool, error) {
+    cfg.Finalize()
+
+    // Validate initial configuration
+    if cfg.MaxConnections < 1 || cfg.MaxConnections > 1000 {
+        return nil, fmt.Errorf("max connections must be 1-1000")
+    }
+
+    if cfg.IdleTimeout < 0 {
+        return nil, fmt.Errorf("idle timeout must be >= 0")
+    }
+
+    pool := &ConnectionPool{
+        settings: cfg,
+        conns:    make([]*Connection, 0, cfg.MaxConnections),
+    }
+
+    return pool, nil
+}
+
+// Read access with read lock
+func (p *ConnectionPool) MaxConnections() int {
+    p.mutex.RLock()
+    defer p.mutex.RUnlock()
+    return p.settings.MaxConnections
+}
+
+// Write access with validation and write lock
+func (p *ConnectionPool) SetMaxConnections(max int) error {
+    // Validate before acquiring lock
+    if max < 1 || max > 1000 {
+        return fmt.Errorf("max connections must be 1-1000, got %d", max)
+    }
+
+    p.mutex.Lock()
+    defer p.mutex.Unlock()
+
+    oldMax := p.settings.MaxConnections
+    p.settings.MaxConnections = max
+
+    // Resize pool if needed
+    if max < oldMax {
+        return p.shrinkPool(max)
+    } else if max > oldMax {
+        return p.expandPool(max)
+    }
+
+    return nil
+}
+
+// Private resize methods
+func (p *ConnectionPool) shrinkPool(newMax int) error {
+    // Close excess connections
+}
+
+func (p *ConnectionPool) expandPool(newMax int) error {
+    // Prepare capacity for more connections
 }
 ```
 
@@ -818,7 +1202,7 @@ The document-context project demonstrates library layer organization:
 ```go
 module github.com/JaimeStill/document-context
 
-go 1.25.2
+go 1.25.4
 
 require (
     github.com/pdfcpu/pdfcpu v0.8.1
