@@ -39,6 +39,15 @@ pkg/logger → pkg/config
 pkg/encoding (independent utility)
 ```
 
+## Architectural Framework
+
+This library implements Layer 1 (Package) and Layer 2 (Library/Module) patterns from **Layered Composition Architecture**. Package-level transformations (configuration → domain objects) compose upward into library-level capabilities (module public API).
+
+**Configuration flows downward**: Applications → Libraries → Packages → Configuration structs
+**Interfaces flow upward**: Package interfaces → Library API → Application usage
+
+See [LCA Framework](./_context/lca/layered-composition-architecture.md) for the complete philosophy spanning package through platform layers, or [LCA Synopsis](./_context/lca/lca-synopsis.md) for a quick overview.
+
 ## Core Abstractions
 
 ### Configuration Package (pkg/config/)
@@ -1354,56 +1363,3 @@ if err != nil {
 ```
 
 Enables error type checking and root cause identification.
-
-## Future Architectural Considerations
-
-As new features are added, these architectural elements will need consideration:
-
-### Streaming Support
-
-For very large documents, streaming pages on-demand:
-```go
-type StreamingDocument interface {
-    Pages() <-chan Page
-    Errors() <-chan error
-}
-```
-
-### Parallel Processing
-
-Concurrent page conversion with worker pools:
-```go
-type BatchOptions struct {
-    MaxConcurrency int
-    ProgressCallback func(pageNum int, total int)
-}
-
-func (d *Document) ConvertAll(opts BatchOptions) ([][]byte, error)
-```
-
-### Caching Layer
-
-Cache converted pages to avoid redundant processing:
-```go
-type CachedDocument struct {
-    doc   Document
-    cache map[int][]byte
-}
-```
-
-### Format Detection
-
-Auto-detect format from file content:
-```go
-func Open(path string) (Document, error) {
-    format := detectFormat(path)
-    switch format {
-    case FormatPDF:
-        return OpenPDF(path)
-    case FormatWord:
-        return OpenWord(path)
-    }
-}
-```
-
-These enhancements will be documented as they are implemented.

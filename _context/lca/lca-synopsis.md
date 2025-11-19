@@ -82,35 +82,19 @@ Platform Service
 
 ## Why This Matters
 
-### If You Work at the Package Layer
-You're defining the foundation. Your interfaces flow upward through every layer above. A well-designed package API makes services easier to build and containers easier to configure.
+### Your Layer, Your Impact
 
-**Your decisions affect**: Service design, deployment complexity, testing at all layers
+**Package Layer**: Your interfaces flow upward through every layer. Design affects service architecture and deployment complexity.
 
-### If You Work at the Library Layer
-You're creating reusable units. Your module boundaries determine what services can compose together. Your dependency choices cascade through images and containers.
+**Library Layer**: Your module boundaries determine what services can compose. Dependencies cascade through all higher layers.
 
-**Your decisions affect**: Binary size, deployment time, runtime dependencies, service capabilities
+**Server Layer**: You bridge code and infrastructure. Endpoints become container entrypoints, request validation protects business logic.
 
-### If You Work at the Server Layer
-You're the bridge between code and infrastructure. Your endpoints become container entrypoints. Your request validation is the last line of defense before business logic.
+**Image Layer**: You define runtime environment. Image size affects deployment speed, base images determine security posture.
 
-**Your decisions affect**: Image design, container configuration, platform deployment patterns
+**Container Layer**: You manage process isolation. Resource limits affect platform capacity, networking determines service connectivity.
 
-### If You Work at the Image Layer
-You're defining the runtime environment. Your image size affects deployment speed. Your base image choices determine security posture.
-
-**Your decisions affect**: Container startup time, resource consumption, platform scaling patterns
-
-### If You Work at the Container Layer
-You're managing process isolation. Your resource limits affect platform capacity. Your networking config determines service connectivity.
-
-**Your decisions affect**: Platform scheduling efficiency, cluster resource utilization
-
-### If You Work at the Platform Layer
-You're orchestrating the entire stack. Your manifests configure containers, which instantiate images, which run servers, which use libraries, which depend on packages.
-
-**Your decisions affect**: Service availability, scaling behavior, operational complexity
+**Platform Layer**: You orchestrate the complete stack. Manifests drive containers, which run images, which execute servers, which use libraries, which depend on packages.
 
 ## The Universal Pattern: Data vs Behavior
 
@@ -153,49 +137,21 @@ Each layer is testable without requiring higher layers. Package tests don't need
 ### Consistency
 The same pattern at every layer means the same mental model from code to cloud. New team members recognize the structure immediately.
 
-## Practical Implications
+## Applying LCA Principles
 
-### When Designing Packages
-- Separate configuration (data) from domain objects (behavior)
-- Use transformation functions (`New*()`) that validate and return interfaces
-- Configuration should never leak into business logic
-- Choose appropriate configuration type: Type 1 (initialization-only, discard after), Type 2 (immutable runtime settings, store directly), or Type 3 (mutable runtime settings, validate mutations)
+The framework provides specific guidance for each composition layer:
 
-### When Designing Interfaces with Multiple Implementations
-- Base configuration contains common fields shared across all implementations
-- Options map (`map[string]any`) stores implementation-specific configuration as flexible data
-- Parse functions transform options map into typed implementation-specific config structs
-- Transformation boundary validates both common and implementation-specific configurations
-- Works with any instantiation pattern: factories, registries, or dependency injection
-- **Pattern**: `BaseConfig + Options map → Parse → TypedImplConfig → Validate → Behavior`
+**Package Design**: Separate configuration (data) from domain objects (behavior). Use transformation functions that validate and return interfaces. See [Configuration Transformation Pattern](./layered-composition-architecture.md#configuration-transformation-pattern) for Type 1/2/3 decision framework and [Configuration Composition Pattern](./layered-composition-architecture.md#configuration-composition-pattern) for interfaces with multiple implementations.
 
-**Enhanced Pattern: Embedded Base Configuration**
-- Implementation-specific config embeds the base config for cleaner architecture
-- Domain object stores single `settings` field containing both base and specific config
-- Access base config via `settings.Config`, specific fields via `settings.SpecificField`
-- Settings() returns embedded base config, Parameters() returns implementation-specific params
-- **Structure**: `TypedImplConfig { Config BaseConfig; SpecificFields }`
-- **Benefits**: Single storage field, natural encapsulation, cleaner access patterns
+**Library Architecture**: Define clear module boundaries and stable public APIs. Expose interfaces, not concrete types. Version compatibility is a contract with all higher layers.
 
-### When Building Libraries
-- Module boundaries should be clear and stable
-- Public APIs should expose interfaces, not concrete types
-- Version compatibility is a contract with all higher layers
+**Service Development**: Request structures (Query/Command) are data that transform into executors (behavior). Validation at service boundary, not in domain logic. See [Layer 3: Server](./layered-composition-architecture.md#layer-3-server-service) for Query-Command pattern.
 
-### When Creating Services
-- Request structures (Query/Command) are data that transform into executors (behavior)
-- Validation happens at the service boundary, not in domain logic
-- Services are just libraries with a `main()` entrypoint
+**Image Building**: Build specs are data; built images are behavior. Runtime configuration happens at container layer, not image layer.
 
-### When Containerizing
-- Image build specs are data; built images are behavior
-- Runtime configuration (env vars, volumes) happens at container layer, not image layer
-- Each container is an instance of the image with specific runtime context
+**Container Management**: Each container is an image instance with specific runtime context. Resource limits and networking configured at this layer.
 
-### When Deploying to Platforms
-- Manifests are data describing desired state
-- Platform maintains actual state through continuous reconciliation
-- The transformation never "completes" - it's a continuous loop
+**Platform Orchestration**: Manifests describe desired state; platform maintains actual state through continuous reconciliation. The transformation never "completes" - it's a continuous loop.
 
 ## Reading the Full Document
 

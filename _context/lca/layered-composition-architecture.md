@@ -4,6 +4,8 @@
 
 This document describes **Layered Composition Architecture** (LCA), a comprehensive architectural philosophy for building robust, maintainable software systems through consistent application of boundary-driven design patterns across all composition layers - from individual packages to cloud platforms.
 
+**New to LCA?** Start with the [LCA Synopsis](./lca-synopsis.md) for a 10-15 minute overview before diving into this comprehensive documentation.
+
 **Core Principle**: At every composition layer, data structures (configurations, specifications, manifests) are ephemeral containers that transform into domain objects (behavior, runtime instances, active systems) at explicit boundaries through validation and initialization. All interactions happen through well-defined interfaces, ensuring clear contracts and hidden implementation details.
 
 **The Composition Stack**: Modern software systems compose through six distinct layers, each with natural boundaries and transformation points:

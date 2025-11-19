@@ -53,8 +53,6 @@ go get github.com/JaimeStill/document-context
 
 ### Basic PDF to Image Conversion
 
-Convert a PDF page to PNG image:
-
 ```go
 package main
 
@@ -68,10 +66,15 @@ import (
 )
 
 func main() {
-    // Create image configuration
+    // Create configuration (or use config.DefaultImageConfig() for PNG, 300 DPI)
     cfg := config.ImageConfig{
-        Format: "png",
-        DPI:    300,
+        Format:  "png",    // "png" or "jpg"
+        DPI:     300,      // Resolution
+        Quality: 85,       // JPEG quality (1-100, ignored for PNG)
+        Options: map[string]any{
+            "brightness": 110,  // 0-200, 100=neutral
+            "contrast":   10,   // -100 to +100, 0=neutral
+        },
     }
 
     // Transform configuration to renderer
@@ -81,7 +84,7 @@ func main() {
         return
     }
 
-    // Open PDF document
+    // Open PDF and extract page
     doc, err := document.OpenPDF("report.pdf")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to open PDF: %v\n", err)
@@ -89,14 +92,13 @@ func main() {
     }
     defer doc.Close()
 
-    // Get first page
     page, err := doc.ExtractPage(1)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to extract page: %v\n", err)
         return
     }
 
-    // Convert to image using renderer (nil = no caching)
+    // Convert to image (nil = no caching)
     imageData, err := page.ToImage(renderer, nil)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to convert page: %v\n", err)
@@ -114,568 +116,103 @@ func main() {
 }
 ```
 
-### JPEG Output with Custom Quality
-
-Convert PDF page to JPEG with specific quality setting:
-
+**Processing Multiple Pages**:
 ```go
-package main
-
-import (
-    "fmt"
-    "os"
-
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Create JPEG configuration with custom quality
-    cfg := config.ImageConfig{
-        Format:  "jpg",
-        Quality: 85,
-        DPI:     150,
-    }
-
-    // Transform to renderer
-    renderer, err := image.NewImageMagickRenderer(cfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    doc, err := document.OpenPDF("photo-document.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    page, err := doc.ExtractPage(1)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Convert using renderer (nil = no caching)
-    imageData, err := page.ToImage(renderer, nil)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    err = os.WriteFile("page-1.jpg", imageData, 0644)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    fmt.Println("Successfully converted page to JPEG")
+// Extract all pages
+pages, err := doc.ExtractAllPages()
+if err != nil {
+    return err
 }
-```
 
-### Using Default Configuration
-
-Simplify conversion with sensible defaults:
-
-```go
-package main
-
-import (
-    "fmt"
-    "os"
-
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Use defaults: PNG format, 300 DPI
-    cfg := config.DefaultImageConfig()
-    renderer, err := image.NewImageMagickRenderer(cfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    doc, err := document.OpenPDF("contract.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    page, err := doc.ExtractPage(1)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
+// Convert each page
+for _, page := range pages {
     imageData, err := page.ToImage(renderer, nil)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    err = os.WriteFile("page-1.png", imageData, 0644)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    fmt.Println("Successfully converted page with defaults")
+    // Handle imageData...
 }
 ```
 
 ### Using the Filesystem Cache
 
-Enable persistent caching to avoid redundant PDF rendering:
+Enable persistent caching for faster repeated conversions:
 
 ```go
-package main
-
-import (
-    "fmt"
-    "os"
-
-    "github.com/JaimeStill/document-context/pkg/cache"
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Create cache configuration
-    cacheCfg := &config.CacheConfig{
-        Name: "filesystem",
-        Logger: config.LoggerConfig{
-            Level: config.LogLevelInfo,
-        },
-        Options: map[string]any{
-            "directory": "/var/cache/document-context",
-        },
-    }
-
-    // Create cache instance
-    c, err := cache.Create(cacheCfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to create cache: %v\n", err)
-        return
-    }
-
-    // Create renderer
-    imgCfg := config.DefaultImageConfig()
-    renderer, err := image.NewImageMagickRenderer(imgCfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to create renderer: %v\n", err)
-        return
-    }
-
-    // Open document
-    doc, err := document.OpenPDF("large-document.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to open PDF: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    // Convert page with caching
-    page, err := doc.ExtractPage(1)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to extract page: %v\n", err)
-        return
-    }
-
-    // First call: renders and caches
-    // Subsequent calls: returns cached result
-    imageData, err := page.ToImage(renderer, c)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to convert page: %v\n", err)
-        return
-    }
-
-    err = os.WriteFile("page-1.png", imageData, 0644)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to write image: %v\n", err)
-        return
-    }
-
-    fmt.Println("Successfully converted page (cached for future use)")
+// Create cache configuration
+cacheCfg := &config.CacheConfig{
+    Name: "filesystem",
+    Logger: config.LoggerConfig{Level: config.LogLevelInfo},
+    Options: map[string]any{
+        "directory": "/var/cache/document-context",
+    },
 }
+
+// Create cache instance
+c, err := cache.Create(cacheCfg)
+if err != nil {
+    return err
+}
+
+// Create renderer and open document (as shown in basic example)
+renderer, _ := image.NewImageMagickRenderer(config.DefaultImageConfig())
+doc, _ := document.OpenPDF("large-document.pdf")
+defer doc.Close()
+
+page, _ := doc.ExtractPage(1)
+
+// Pass cache to ToImage() - first call renders and caches, subsequent calls return cached result
+imageData, err := page.ToImage(renderer, c)
 ```
 
-**Cache Behavior**:
-- First conversion: Renders page and stores in cache
-- Subsequent conversions: Returns cached image immediately (no rendering)
-- Cache keys are generated from document path, page number, and all rendering parameters
-- Changing any parameter (DPI, quality, filters) creates a new cache entry
-
-**Benefits**:
-- Dramatically faster repeated conversions of the same page
-- Reduces CPU usage for frequently accessed documents
-- Transparent - works without code changes (pass cache vs nil)
+**Cache Keys**: Generated from document path, page number, and rendering parameters (DPI, quality, filters). Changing any parameter creates a new cache entry.
 
 ### Data URI Encoding for LLM APIs
 
-Convert document pages to data URIs for direct LLM consumption:
+Convert pages to base64 data URIs for LLM vision APIs:
 
 ```go
-package main
+import "github.com/JaimeStill/document-context/pkg/encoding"
 
-import (
-    "fmt"
+// After converting page to image (as shown above)
+imageData, _ := page.ToImage(renderer, nil)
 
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/encoding"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Create renderer with defaults
-    cfg := config.DefaultImageConfig()
-    renderer, err := image.NewImageMagickRenderer(cfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    doc, err := document.OpenPDF("analysis.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    page, err := doc.ExtractPage(1)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Convert page to image (nil = no caching)
-    imageData, err := page.ToImage(renderer, nil)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Encode as data URI
-    dataURI, err := encoding.EncodeImageDataURI(imageData, document.PNG)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Data URI is now ready for LLM API
-    fmt.Printf("Data URI length: %d bytes\n", len(dataURI))
-    fmt.Printf("Data URI prefix: %s...\n", dataURI[:50])
-
-    // Use dataURI with LLM vision API
-    // response := llm.Vision("Analyze this document", []string{dataURI})
+// Encode as data URI
+dataURI, err := encoding.EncodeImageDataURI(imageData, document.PNG)
+if err != nil {
+    return err
 }
+
+// Use dataURI with LLM vision API
+// response := llm.Vision("Analyze this document", []string{dataURI})
 ```
 
-### Processing All Pages
-
-Convert entire PDF to images:
-
-```go
-package main
-
-import (
-    "fmt"
-    "os"
-    "path/filepath"
-
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Create renderer once, reuse for all pages
-    cfg := config.DefaultImageConfig()
-    renderer, err := image.NewImageMagickRenderer(cfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    doc, err := document.OpenPDF("multi-page.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    fmt.Printf("Processing %d pages...\n", doc.PageCount())
-
-    // Extract all pages
-    pages, err := doc.ExtractAllPages()
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Convert each page
-    for _, page := range pages {
-        imageData, err := page.ToImage(renderer, nil)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
-                page.Number(), err)
-            continue
-        }
-
-        filename := filepath.Join("output",
-            fmt.Sprintf("page-%d.png", page.Number()))
-
-        err = os.WriteFile(filename, imageData, 0644)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to write page %d: %v\n",
-                page.Number(), err)
-            continue
-        }
-
-        fmt.Printf("Converted page %d\n", page.Number())
-    }
-
-    fmt.Println("Processing complete")
-}
-```
-
-### Applying Enhancement Filters
-
-Improve document clarity with ImageMagick filters:
-
-```go
-package main
-
-import (
-    "fmt"
-    "os"
-
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/image"
-)
-
-func main() {
-    // Create configuration with enhancement filters
-    cfg := config.ImageConfig{
-        Format: "png",
-        DPI:    300,
-        Options: map[string]any{
-            "brightness": 110,  // Increase brightness (0-200, 100=neutral)
-            "contrast":   10,   // Increase contrast (-100 to +100, 0=neutral)
-            "saturation": 90,   // Slightly desaturate (0-200, 100=neutral)
-        },
-    }
-
-    renderer, err := image.NewImageMagickRenderer(cfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
-        return
-    }
-
-    doc, err := document.OpenPDF("faded-scan.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    page, err := doc.ExtractPage(1)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    // Convert with filters applied
-    imageData, err := page.ToImage(renderer, nil)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    err = os.WriteFile("enhanced-page-1.png", imageData, 0644)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
-    }
-
-    fmt.Println("Successfully converted page with filters")
-}
-```
-
-**Available Filters**:
-- `brightness`: 0-200 (100 is neutral, <100 darkens, >100 lightens)
-- `contrast`: -100 to +100 (0 is neutral, negative decreases, positive increases)
-- `saturation`: 0-200 (100 is neutral, <100 desaturates, >100 increases color)
-- `rotation`: 0-360 degrees (clockwise rotation)
-- `background`: Color name for alpha channel (default: "white")
-
-**Common Use Cases**:
-- Faded documents: Increase brightness and contrast
-- Low-quality scans: Adjust brightness, increase contrast, desaturate slightly
-- Dark scans: Increase brightness significantly
-- Rotated pages: Use rotation to correct orientation
-
-### Integration with go-agents
-
-Use document-context with go-agents for LLM analysis:
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-
-    "github.com/JaimeStill/document-context/pkg/config"
-    "github.com/JaimeStill/document-context/pkg/document"
-    "github.com/JaimeStill/document-context/pkg/encoding"
-    "github.com/JaimeStill/document-context/pkg/image"
-    "github.com/JaimeStill/go-agents/pkg/agent"
-    agentConfig "github.com/JaimeStill/go-agents/pkg/config"
-)
-
-func main() {
-    // Load agent configuration
-    agentCfg, err := agentConfig.LoadAgentConfig("config.json")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-        return
-    }
-
-    // Create agent
-    agent, err := agent.New(agentCfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)
-        return
-    }
-
-    // Create image renderer
-    imgCfg := config.DefaultImageConfig()
-    renderer, err := image.NewImageMagickRenderer(imgCfg)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to create renderer: %v\n", err)
-        return
-    }
-
-    // Open and process document
-    doc, err := document.OpenPDF("contract.pdf")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to open PDF: %v\n", err)
-        return
-    }
-    defer doc.Close()
-
-    // Convert pages to data URIs
-    pages, err := doc.ExtractAllPages()
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to extract pages: %v\n", err)
-        return
-    }
-
-    var images []string
-    for _, page := range pages {
-        imageData, err := page.ToImage(renderer, nil)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to convert page %d: %v\n",
-                page.Number(), err)
-            continue
-        }
-
-        dataURI, err := encoding.EncodeImageDataURI(imageData, document.PNG)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "Failed to encode page %d: %v\n",
-                page.Number(), err)
-            continue
-        }
-
-        images = append(images, dataURI)
-    }
-
-    // Send to LLM for analysis
-    ctx := context.Background()
-    response, err := agent.Vision(ctx,
-        "Analyze this contract and summarize the key terms",
-        images,
-    )
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "LLM analysis failed: %v\n", err)
-        return
-    }
-
-    // Process response
-    fmt.Println("Analysis:", response.Choices[0].Message.Content)
-}
-```
+For integration with [go-agents](https://github.com/JaimeStill/go-agents), see the go-agents documentation for vision API usage patterns.
 
 ## Configuration
 
-### Image Configuration
-
-The library uses a configuration-to-renderer transformation pattern. Configuration is data, renderers are behavior.
+The library uses a configuration-to-renderer transformation pattern where configuration (data) transforms into renderers (behavior):
 
 ```go
-type ImageConfig struct {
-    Format  string         // "png" or "jpg"
-    Quality int            // JPEG quality (1-100), ignored for PNG
-    DPI     int            // Resolution in dots per inch
-    Options map[string]any // Implementation-specific options (filters, etc.)
-}
-```
-
-**Options map** contains implementation-specific settings:
-- **ImageMagick filters**: brightness (0-200, 100=neutral), contrast (-100 to +100, 0=neutral), saturation (0-200, 100=neutral), rotation (0-360 degrees)
-- **Background color**: "white", "black", "transparent", or any ImageMagick color name
-- Settings are parsed and validated during renderer creation
-
-### Creating a Renderer
-
-```go
-// 1. Create configuration
+// Create configuration
 cfg := config.ImageConfig{
-    Format: "png",
-    DPI:    300,
+    Format:  "png",    // "png" or "jpg"
+    Quality: 85,       // JPEG quality (1-100), ignored for PNG
+    DPI:     300,      // Resolution (72/150/300/600)
+    Options: map[string]any{  // ImageMagick filters
+        "brightness": 110,     // 0-200, 100=neutral
+        "contrast":   10,      // -100 to +100, 0=neutral
+        "saturation": 100,     // 0-200, 100=neutral
+        "rotation":   0,       // 0-360 degrees
+        "background": "white", // Color name for alpha channel
+    },
 }
 
-// 2. Transform to renderer (validates configuration)
+// Transform to renderer (validates configuration)
 renderer, err := image.NewImageMagickRenderer(cfg)
-if err != nil {
-    // Handle invalid configuration
-}
 
-// 3. Use renderer with pages (nil = no caching)
-imageData, err := page.ToImage(renderer, nil)
+// Or use defaults: PNG, 300 DPI, no filters
+renderer, _ := image.NewImageMagickRenderer(config.DefaultImageConfig())
 ```
 
-### Using Defaults
-
-```go
-cfg := config.DefaultImageConfig()  // PNG, 300 DPI, no filters
-renderer, _ := image.NewImageMagickRenderer(cfg)
-```
-
-**Format Selection**:
-- **PNG**: Best for text-heavy documents, no quality loss, larger files
-- **JPEG**: Best for photo-heavy documents, smaller files, configurable quality
-
-**Quality Settings** (JPEG only):
-- 1-50: Low quality, small files, visible artifacts
-- 50-75: Medium quality, balanced size/quality
-- 75-90: High quality, larger files, minimal artifacts
-- 90-100: Very high quality, large files, nearly lossless
-
-**DPI Recommendations**:
-- 72: Screen viewing only
-- 150: Web images, low resolution
-- 300: Standard print quality, high resolution (default)
-- 600: Professional print, very high resolution
+**Format Selection**: PNG (lossless, larger) vs JPEG (lossy, smaller). **DPI**: 72 (screen), 150 (web), 300 (print/default), 600 (professional).
 
 ## Testing
 
@@ -699,116 +236,35 @@ go test ./tests/encoding/... -v
 
 ## Error Handling
 
-### Common Errors
+All operations return descriptive errors with context:
 
-**PDF Opening Errors**:
 ```go
-doc, err := document.OpenPDF("missing.pdf")
-if err != nil {
-    // File not found, invalid PDF, corrupted file
-}
+// Common error scenarios
+doc, err := document.OpenPDF("file.pdf")     // File not found, invalid/corrupted PDF
+page, err := doc.ExtractPage(999)            // Page out of range
+imageData, err := page.ToImage(renderer, c)  // ImageMagick not installed, config invalid
+dataURI, err := encoding.EncodeImageDataURI(data, format)  // Empty data, unsupported format
 ```
 
-**Page Range Errors**:
-```go
-page, err := doc.ExtractPage(999)
-if err != nil {
-    // Page number out of range [1-N]
-}
-```
-
-**Image Conversion Errors**:
-```go
-imageData, err := page.ToImage(renderer, cache)
-if err != nil {
-    // ImageMagick not installed
-    // Invalid format or quality settings
-    // Insufficient disk space for temp files
-    // Cache storage errors (if cache provided)
-}
-```
-
-**Encoding Errors**:
-```go
-dataURI, err := encoding.EncodeImageDataURI(imageData, format)
-if err != nil {
-    // Empty image data
-    // Unsupported format
-}
-```
-
-### Error Messages
-
-The library provides detailed error messages with context:
-
-```
-imagemagick failed for page 1: exit status 1
-Output: convert-im6.q16: unable to read font...
-```
-
-These messages include:
-- Which operation failed
-- Which page (if applicable)
-- The external command output (for debugging)
+Error messages include operation context and external command output for debugging.
 
 ## Deployment
 
-### Container Deployment
+**Container Deployment** - Ensure ImageMagick is available:
 
-When deploying services that use document-context, ensure ImageMagick is available:
-
-**Dockerfile Example**:
 ```dockerfile
 FROM golang:1.25-alpine
-
-# Install ImageMagick
 RUN apk add --no-cache imagemagick
-
-# Copy application
-COPY . /app
-WORKDIR /app
-
-# Build
-RUN go build -o service .
-
-CMD ["./service"]
-```
-
-**Ubuntu-based Container**:
-```dockerfile
-FROM golang:1.25
-
-# Install ImageMagick
-RUN apt-get update && \
-    apt-get install -y imagemagick && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy and build application
 COPY . /app
 WORKDIR /app
 RUN go build -o service .
-
 CMD ["./service"]
 ```
 
-### Binary Verification at Startup
-
-Check for required binaries when your application starts:
-
+**Startup Verification**:
 ```go
-func checkDependencies() error {
-    if _, err := exec.LookPath("magick"); err != nil {
-        return fmt.Errorf("ImageMagick not installed: %w", err)
-    }
-    return nil
-}
-
-func main() {
-    if err := checkDependencies(); err != nil {
-        log.Fatal(err)
-    }
-    
-    // Application startup continues...
+if _, err := exec.LookPath("magick"); err != nil {
+    log.Fatal("ImageMagick not installed")
 }
 ```
 
@@ -824,26 +280,7 @@ func main() {
 
 ## Roadmap
 
-### Planned Features
-
-**Additional Document Formats**:
-- Office documents (.docx, .xlsx, .pptx) via OpenXML
-- Image formats (.png, .jpg) via OCR
-- HTML and Markdown documents
-
-**Alternative Outputs**:
-- Raw text extraction
-- Structured text with formatting
-- Hybrid text + images
-- Metadata extraction
-
-**Processing Enhancements**:
-- ~~Caching layer for repeated operations~~ ✅ Implemented (Phase 2 Sessions 2-4)
-- Parallel page processing
-- Streaming for large documents
-- Intelligent chunking strategies
-
-See [PROJECT.md](./PROJECT.md) for detailed roadmap.
+Planned features include additional document formats (Office, HTML, Markdown), alternative outputs (text extraction, structured content), and processing enhancements (parallel processing, streaming). See [PROJECT.md](./PROJECT.md) for the complete roadmap and current development status.
 
 ## License
 
