@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.1.1] - 2025-12-15
+
+**Added**:
+
+- `pkg/document` - Image format parsing and document format registry
+
+  Adds `ParseImageFormat()` function for parsing string input to `ImageFormat` type with case-insensitive matching ("png", "jpg", "jpeg") and empty string defaulting to PNG. Adds format registry with `Open()` for content-type-based document opening, `IsSupported()` for format validation, and `SupportedFormats()` for listing available content types. Currently supports "application/pdf" with extensible registry pattern.
+
+**Changed**:
+
+- Go version updated from 1.25.4 to 1.25.5
+
 ## [v0.1.0] - 2025-11-19
 
 Initial pre-release.

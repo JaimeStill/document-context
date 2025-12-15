@@ -1,6 +1,6 @@
 module github.com/JaimeStill/document-context
 
-go 1.25.4
+go 1.25.5
 
 require github.com/pdfcpu/pdfcpu v0.11.1
 
