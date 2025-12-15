@@ -141,7 +141,7 @@ type PDFDocument struct {
 - Clean up temporary files with `defer os.Remove()`
 - Capture both stdout and stderr with `CombinedOutput()` for debugging
 
-### Modern Go Idioms (Go 1.25.4+)
+### Modern Go Idioms (Go 1.25.5+)
 **Principle**: Always engage a subagent to use Context7 MCP to verify code patterns align with the latest Go idioms and standard library best practices when planning code architecture.
 
 **Rationale**: Go evolves with each release, introducing new built-in functions (like `min`/`max` in 1.21), new standard library methods (like `sync.WaitGroup.Go()` in 1.25.0), and refined patterns. Using Context7 ensures implementation guides reflect modern, idiomatic Go code that leverages the latest language features for cleaner, more maintainable implementations.
@@ -154,7 +154,7 @@ type PDFDocument struct {
    ```
    Task tool with subagent_type: "general-purpose"
    Prompt: "Review the implementation guide at [path] and verify all code blocks against
-   Go 1.25.4 idioms using Context7 MCP. Retrieve the complete golang/go documentation
+   Go 1.25.5 idioms using Context7 MCP. Retrieve the complete golang/go documentation
    (10,000 tokens) and check for: modern concurrency patterns, proper error handling,
    channel safety, context usage, and new stdlib methods. Return a summary of findings
    with specific line numbers and recommendations."
@@ -167,7 +167,7 @@ type PDFDocument struct {
    - context7CompatibleLibraryID: "/golang/go"
    - tokens: 10000
    ```
-   This retrieves the complete Go 1.25.4 standard library documentation covering all packages, patterns, and idioms.
+   This retrieves the complete Go 1.25.5 standard library documentation covering all packages, patterns, and idioms.
 
 3. **Get focused topic documentation** (for specific questions in main conversation):
    ```
